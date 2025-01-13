@@ -32,6 +32,11 @@ func (u UsageFlowAPI) RequestInterceptor(routes []Route) gin.HandlerFunc {
 		method := c.Request.Method
 		url := c.Request.URL.Path
 
+		if method == "POST" && url == "/api/v1/ledgers/measure/use" {
+			c.Next() // Skip this route
+			return
+		}
+
 		for _, route := range routes {
 			// Match the method and URL, including wildcards
 			if (route.Method == "*" || strings.ToUpper(route.Method) == method) &&
