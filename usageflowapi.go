@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/golang-jwt/jwt/v5"
 )
 
 // Route defines an individual route configuration
@@ -75,7 +76,16 @@ func (u UsageFlowAPI) RequestInterceptor(routes []Route) gin.HandlerFunc {
 		// Add headers to metadata (e.g., Authorization, X-Request-ID)
 		headers := c.Request.Header
 		if len(headers) > 0 {
-			metadata["headers"] = headers
+			// Create a copy of headers to avoid modifying the original
+			sanitizedHeaders := make(map[string][]string)
+			for key, values := range headers {
+				// Exclude the "Authorization" header
+				if strings.ToLower(key) == "authorization" {
+					continue
+				}
+				sanitizedHeaders[key] = values
+			}
+			metadata["headers"] = sanitizedHeaders
 		}
 
 		// Add location (X-Forwarded-For header, if available)
@@ -119,12 +129,27 @@ func (u UsageFlowAPI) RequestInterceptor(routes []Route) gin.HandlerFunc {
 	}
 }
 func (u *UsageFlowAPI) GuessLedgerId(c *gin.Context) string {
+	// Helper function to extract sub from Bearer token
+	getSubFromBearerToken := func(token string) string {
+		parsedToken, _, err := jwt.NewParser().ParseUnverified(token, jwt.MapClaims{})
+		if err != nil {
+			return ""
+		}
+
+		if claims, ok := parsedToken.Claims.(jwt.MapClaims); ok {
+			if sub, exists := claims["sub"].(string); exists {
+				return sub
+			}
+		}
+		return ""
+	}
+
 	// 1. Check Authorization header for Bearer token
 	authHeader := c.GetHeader("Authorization")
 	if strings.HasPrefix(authHeader, "Bearer ") {
 		token := strings.TrimPrefix(authHeader, "Bearer ")
-		if decodedToken := decodeBearerToken(token); decodedToken != "" {
-			return transformToLedgerId(decodedToken)
+		if sub := getSubFromBearerToken(token); sub != "" {
+			return transformToLedgerId(sub)
 		}
 	}
 
@@ -147,8 +172,6 @@ func (u *UsageFlowAPI) GuessLedgerId(c *gin.Context) string {
 
 	// 4. Check JSON body for accountId or userId without consuming the body
 	var bodyData map[string]interface{}
-
-	// Save the original body
 	bodyBytes, err := io.ReadAll(c.Request.Body)
 	if err == nil {
 		// Restore the body so it can be read later
