@@ -118,7 +118,6 @@ func (u UsageFlowAPI) RequestInterceptor(routes []Route) gin.HandlerFunc {
 		c.Next()
 	}
 }
-
 func (u *UsageFlowAPI) GuessLedgerId(c *gin.Context) string {
 	// 1. Check Authorization header for Bearer token
 	authHeader := c.GetHeader("Authorization")
@@ -146,14 +145,23 @@ func (u *UsageFlowAPI) GuessLedgerId(c *gin.Context) string {
 		return transformToLedgerId(accountId)
 	}
 
-	// 4. Check JSON body for accountId or userId
+	// 4. Check JSON body for accountId or userId without consuming the body
 	var bodyData map[string]interface{}
-	if err := c.ShouldBindJSON(&bodyData); err == nil {
-		if userId, exists := bodyData["userId"].(string); exists {
-			return transformToLedgerId(userId)
-		}
-		if accountId, exists := bodyData["accountId"].(string); exists {
-			return transformToLedgerId(accountId)
+
+	// Save the original body
+	bodyBytes, err := io.ReadAll(c.Request.Body)
+	if err == nil {
+		// Restore the body so it can be read later
+		c.Request.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
+
+		// Attempt to parse the body
+		if err := json.Unmarshal(bodyBytes, &bodyData); err == nil {
+			if userId, exists := bodyData["userId"].(string); exists {
+				return transformToLedgerId(userId)
+			}
+			if accountId, exists := bodyData["accountId"].(string); exists {
+				return transformToLedgerId(accountId)
+			}
 		}
 	}
 
