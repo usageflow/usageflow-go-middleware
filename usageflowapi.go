@@ -298,11 +298,17 @@ func (u UsageFlowAPI) ExecuteRequestWithMetadata(ledgerId, method, url string, m
 		}
 	}
 
-	c.Next()
+	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		c.Next()
 
-	u.ExecuteFulfillRequestWithMetadata(ledgerId, method, url, metadata, c)
+		u.ExecuteFulfillRequestWithMetadata(ledgerId, method, url, metadata, c)
 
-	return resp.StatusCode >= 200 && resp.StatusCode < 300, nil
+		return resp.StatusCode >= 200 && resp.StatusCode < 300, nil
+	} else {
+		c.AbortWithStatusJSON(400, gin.H{
+			"error": "Request fulfillment failed",
+		})
+	}
 }
 
 func (u UsageFlowAPI) ExecuteFulfillRequestWithMetadata(ledgerId, method, url string, metadata map[string]interface{}, c *gin.Context) (bool, error) {
