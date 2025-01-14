@@ -37,7 +37,7 @@ func (u UsageFlowAPI) RequestInterceptor(routes []Route) gin.HandlerFunc {
 		url := c.Request.URL.Path
 
 		// Skip specific route
-		if method == "POST" && url == "/api/v1/ledgers/measure/use" {
+		if method == "POST" && (url == "/api/v1/ledgers/measure/allocate/use" || url == "/api/v1/ledgers/measure/allocate") {
 			c.Next() // Skip this route
 			return
 		}
@@ -127,17 +127,18 @@ func (u UsageFlowAPI) RequestInterceptor(routes []Route) gin.HandlerFunc {
 			metadata["pathParams"] = paramsMap
 		}
 
+		ledgerId := u.GuessLedgerId(c)
 		for _, route := range routes {
 			// Match the method and URL, including wildcards
 			if (route.Method == "*" || strings.ToUpper(route.Method) == method) &&
 				(route.URL == "*" || route.URL == url) {
 
 				// Extract the ledgerId
-				ledgerId := u.GuessLedgerId(c)
+				// ledgerId := u.GuessLedgerId(c)
 
 				// Execute the request with metadata logging
 				go func() {
-					success, err := u.ExecuteRequestWithMetadata(ledgerId, method, url, metadata)
+					success, err := u.ExecuteRequestWithMetadata(ledgerId, method, url, metadata, c)
 					if err != nil {
 						fmt.Printf("Error processing request for %s %s: %v\n", method, url, err)
 					} else if success {
@@ -150,7 +151,7 @@ func (u UsageFlowAPI) RequestInterceptor(routes []Route) gin.HandlerFunc {
 		}
 
 		// Continue the regular flow without interference
-		c.Next()
+
 	}
 }
 func (u *UsageFlowAPI) GuessLedgerId(c *gin.Context) string {
@@ -244,9 +245,9 @@ func transformToLedgerId(input string) string {
 }
 
 // ExecuteRequest sends a POST request to your server and returns a success flag
-func (u UsageFlowAPI) ExecuteRequestWithMetadata(ledgerId, method, url string, metadata map[string]interface{}) (bool, error) {
-	apiURL := "https://api.usageflow.io/api/v1/ledgers/measure/use"
-
+func (u UsageFlowAPI) ExecuteRequestWithMetadata(ledgerId, method, url string, metadata map[string]interface{}, c *gin.Context) (bool, error) {
+	apiURL := "https://api.usageflow.io/api/v1/ledgers/measure/allocate"
+	// apiURL := "http://127.0.0.1:9000/api/v1/ledgers/measure/allocate"
 	// Set headers
 	headers := map[string]string{
 		"x-usage-key":  u.APIKey,
@@ -255,9 +256,9 @@ func (u UsageFlowAPI) ExecuteRequestWithMetadata(ledgerId, method, url string, m
 
 	// Set body with metadata
 	payload := map[string]interface{}{
-		"alias":    ledgerId,
-		"amount":   1,
-		"metadata": metadata,
+		"alias":  ledgerId,
+		"amount": 1,
+		// "metadata": metadata,
 	}
 	payloadBytes, err := json.Marshal(payload)
 	if err != nil {
@@ -283,8 +284,82 @@ func (u UsageFlowAPI) ExecuteRequestWithMetadata(ledgerId, method, url string, m
 	}
 	defer resp.Body.Close()
 
-	// Log response
-	fmt.Printf("Response from server (%s %s)\n", method, url)
+	bodyBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return false, err
+	}
+
+	// Optionally, unmarshal the response to check for eventId or other keys
+	var responseData map[string]interface{}
+	if err := json.Unmarshal(bodyBytes, &responseData); err == nil {
+		// Store the data in Gin context if "eventId" key exists
+		if eventId, exists := responseData["eventId"]; exists {
+			c.Set("eventId", eventId)
+		}
+	}
+
+	c.Next()
+
+	u.ExecuteFulfillRequestWithMetadata(ledgerId, method, url, metadata, c)
+
+	return resp.StatusCode >= 200 && resp.StatusCode < 300, nil
+}
+
+func (u UsageFlowAPI) ExecuteFulfillRequestWithMetadata(ledgerId, method, url string, metadata map[string]interface{}, c *gin.Context) (bool, error) {
+	apiURL := "https://api.usageflow.io/api/v1/ledgers/measure/allocate/use"
+	// apiURL := "http://127.0.0.1:9000/api/v1/ledgers/measure/allocate/use"
+
+	allocationId, _ := c.Get("eventId")
+	// Set headers
+	headers := map[string]string{
+		"x-usage-key":  u.APIKey,
+		"Content-Type": "application/json",
+	}
+
+	// Set body with metadata
+	payload := map[string]interface{}{
+		"alias":        ledgerId,
+		"amount":       1,
+		"allocationId": allocationId.(string),
+		"metadata":     metadata,
+	}
+	payloadBytes, err := json.Marshal(payload)
+	if err != nil {
+		return false, err
+	}
+
+	// Create HTTP request
+	req, err := http.NewRequest("POST", apiURL, bytes.NewBuffer(payloadBytes))
+	if err != nil {
+		return false, err
+	}
+
+	// Add headers
+	for key, value := range headers {
+		req.Header.Set(key, value)
+	}
+
+	// Execute request
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return false, err
+	}
+	defer resp.Body.Close()
+
+	bodyBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return false, err
+	}
+
+	// Optionally, unmarshal the response to check for eventId or other keys
+	var responseData map[string]interface{}
+	if err := json.Unmarshal(bodyBytes, &responseData); err == nil {
+		// Store the data in Gin context if "eventId" key exists
+		if eventId, exists := responseData["eventId"]; exists {
+			c.Set("eventId", eventId)
+		}
+	}
 
 	return resp.StatusCode >= 200 && resp.StatusCode < 300, nil
 }
