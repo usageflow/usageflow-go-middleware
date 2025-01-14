@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
 
@@ -44,7 +45,8 @@ func (u UsageFlowAPI) RequestInterceptor(routes []Route) gin.HandlerFunc {
 		// Collect metadata
 		metadata := map[string]interface{}{
 			"method":    method,
-			"url":       url,
+			"url":       GetPatternedURL(c), // Route pattern (e.g., /api/v1/ledgers/:id)
+			"rawUrl":    url,                // Raw URL (e.g., /api/v1/ledgers/123)
 			"clientIP":  c.ClientIP(),
 			"userAgent": c.GetHeader("User-Agent"),       // User-Agent header
 			"timestamp": time.Now().Format(time.RFC3339), // Timestamp of the request
@@ -78,13 +80,36 @@ func (u UsageFlowAPI) RequestInterceptor(routes []Route) gin.HandlerFunc {
 		if len(headers) > 0 {
 			// Create a copy of headers to avoid modifying the original
 			sanitizedHeaders := make(map[string][]string)
+
+			// Compile the regular expression for matching keys
+			keyRegex := regexp.MustCompile(`(?i)^x-.*key$`) // (?i) makes it case-insensitive
+
 			for key, values := range headers {
-				// Exclude the "Authorization" header
-				if strings.ToLower(key) == "authorization" {
-					continue
+				// Normalize the header key to lowercase for comparison
+				keyLower := strings.ToLower(key)
+
+				// Mask specific headers based on conditions
+				switch keyLower {
+				case "authorization":
+					// Mask "Authorization" header
+					if len(values) > 0 {
+						sanitizedHeaders[key] = []string{"Bearer ****"}
+					}
+				default:
+					// Check if the key matches the regex for x-*key
+					if keyRegex.MatchString(key) {
+						// Mask headers matching the regex
+						if len(values) > 0 {
+							sanitizedHeaders[key] = []string{"****"}
+						}
+					} else {
+						// For other headers, include them as is
+						sanitizedHeaders[key] = values
+					}
 				}
-				sanitizedHeaders[key] = values
 			}
+
+			// Add sanitized headers to metadata
 			metadata["headers"] = sanitizedHeaders
 		}
 
@@ -190,6 +215,15 @@ func (u *UsageFlowAPI) GuessLedgerId(c *gin.Context) string {
 
 	// 5. Fallback to default ledgerId
 	return ""
+}
+
+func GetPatternedURL(c *gin.Context) string {
+	// Get the route pattern (e.g., "/api/v1/ledgers/allocate/:ledgerId/consume")
+	pattern := c.FullPath()
+	if pattern == "" {
+		return c.Request.URL.Path // Fallback to actual path if no pattern is found
+	}
+	return pattern
 }
 
 // DecodeBearerToken decodes a base64-encoded Bearer token and extracts the user or account identifier
