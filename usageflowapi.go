@@ -309,6 +309,8 @@ func (u UsageFlowAPI) ExecuteRequestWithMetadata(ledgerId, method, url string, m
 			"error": "Request fulfillment failed",
 		})
 	}
+
+	return false, c.Error(err)
 }
 
 func (u UsageFlowAPI) ExecuteFulfillRequestWithMetadata(ledgerId, method, url string, metadata map[string]interface{}, c *gin.Context) (bool, error) {
