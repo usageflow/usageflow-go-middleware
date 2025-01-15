@@ -137,16 +137,19 @@ func (u UsageFlowAPI) RequestInterceptor(routes []Route) gin.HandlerFunc {
 				// ledgerId := u.GuessLedgerId(c)
 
 				// Execute the request with metadata logging
-				go func() {
-					success, err := u.ExecuteRequestWithMetadata(ledgerId, method, url, metadata, c)
-					if err != nil {
-						fmt.Printf("Error processing request for %s %s: %v\n", method, url, err)
-					} else if success {
-						fmt.Printf("Successfully processed request for %s %s\n", method, url)
-					} else {
-						fmt.Printf("Failed to process request for %s %s\n", method, url)
-					}
-				}()
+				// go func() {
+				success, err := u.ExecuteRequestWithMetadata(ledgerId, method, url, metadata, c)
+				if success == false {
+					return
+				}
+				if err != nil {
+					fmt.Printf("Error processing request for %s %s: %v\n", method, url, err)
+				} else if success {
+					fmt.Printf("Successfully processed request for %s %s\n", method, url)
+				} else {
+					fmt.Printf("Failed to process request for %s %s\n", method, url)
+				}
+				// }()
 			}
 		}
 
@@ -307,14 +310,14 @@ func (u UsageFlowAPI) ExecuteRequestWithMetadata(ledgerId, method, url string, m
 
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 		c.Next()
-
 		u.ExecuteFulfillRequestWithMetadata(ledgerId, method, url, metadata, c)
-
 		return resp.StatusCode >= 200 && resp.StatusCode < 300, nil
 	} else {
 		c.AbortWithStatusJSON(400, gin.H{
 			"error": "Request fulfillment failed",
 		})
+
+		return false, nil
 	}
 
 	return false, c.Error(err)
