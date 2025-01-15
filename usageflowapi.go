@@ -156,6 +156,13 @@ func (u UsageFlowAPI) RequestInterceptor(routes []Route) gin.HandlerFunc {
 }
 func (u *UsageFlowAPI) GuessLedgerId(c *gin.Context) string {
 	// Helper function to extract sub from Bearer token
+	method := c.Request.Method
+	url := GetPatternedURL(c)
+
+	if true {
+		return fmt.Sprintf("%s-%s", method, url)
+	}
+
 	getSubFromBearerToken := func(token string) string {
 		parsedToken, _, err := jwt.NewParser().ParseUnverified(token, jwt.MapClaims{})
 		if err != nil {
