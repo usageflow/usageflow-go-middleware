@@ -149,6 +149,7 @@ func (u UsageFlowAPI) RequestInterceptor(routes []Route) gin.HandlerFunc {
 				} else {
 					fmt.Printf("Failed to process request for %s %s\n", method, url)
 				}
+				// c.Next()
 				// }()
 			}
 		}
