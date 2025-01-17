@@ -31,17 +31,87 @@ func (u *UsageFlowAPI) Init(apiKey string) {
 }
 
 // Middleware for intercepting requests before they reach the user's routes
-func (u UsageFlowAPI) RequestInterceptor(routes []Route) gin.HandlerFunc {
+func (u UsageFlowAPI) RequestInterceptor(routes, whiteListRoutes []Route) gin.HandlerFunc {
+	defaultWhiteListRoutes := []Route{
+		{Method: "POST", URL: "/api/v1/ledgers/measure/allocate/use"},
+		{Method: "POST", URL: "/api/v1/ledgers/measure/allocate"},
+	}
+
+	// Combine provided whiteListRoutes with the default ones
+	whiteListRoutes = append(whiteListRoutes, defaultWhiteListRoutes...)
+
+	// Convert routes and whi
+	routesMap := make(map[string]map[string]bool) // Method -> URL -> exists
+	whiteListRoutesMap := make(map[string]map[string]bool)
+
+	// Helper function to populate the map
+	populateMap := func(targetMap map[string]map[string]bool, routes []Route) {
+		for _, route := range routes {
+			if _, exists := targetMap[route.Method]; !exists {
+				targetMap[route.Method] = make(map[string]bool)
+			}
+			targetMap[route.Method][route.URL] = true
+		}
+	}
+
+	// Populate the maps
+	populateMap(routesMap, routes)
+	populateMap(whiteListRoutesMap, whiteListRoutes)
+
 	return func(c *gin.Context) {
 		method := c.Request.Method
-		url := c.Request.URL.Path
+		url := GetPatternedURL(c)
 
-		// Skip specific route
-		if method == "POST" && (url == "/api/v1/ledgers/measure/allocate/use" || url == "/api/v1/ledgers/measure/allocate") {
-			c.Next() // Skip this route
+		if len(routesMap) == 0 {
+			c.Next()
 			return
 		}
 
+		// Check if the current request matches any route in the whitelist
+		if methodRoutes, exists := whiteListRoutesMap[method]; exists {
+			if methodRoutes[url] || methodRoutes["*"] {
+				c.Next() // Skip processing for whitelisted routes
+				return
+			}
+		}
+
+		// Check for "*" method in the whitelist
+		if allMethodsRoutes, exists := whiteListRoutesMap["*"]; exists {
+			if allMethodsRoutes[url] || allMethodsRoutes["*"] {
+				c.Next()
+				return
+			}
+		}
+
+		routeFound := false
+		if methodRoutes, exists := routesMap[method]; exists {
+			if methodRoutes[url] || methodRoutes["*"] {
+				// Add any custom logic for matched routes here
+				// c.Next()
+				routeFound = true
+			}
+		}
+
+		// Check for "*" method in the routesMap
+		if !routeFound {
+			if allMethodsRoutes, exists := routesMap["*"]; exists {
+				if allMethodsRoutes[url] || allMethodsRoutes["*"] {
+					// Add any custom logic for matched routes here
+					// c.Next()
+					routeFound = true
+				}
+			}
+		}
+
+		// Skip specific hardcoded routes
+		// if method == "POST" && (url == "/api/v1/ledgers/measure/allocate/use" || url == "/api/v1/ledgers/measure/allocate") {
+		// 	c.Next() // Skip this route
+		// 	return
+		// }
+
+		if !routeFound {
+			c.Next()
+		}
 		// Collect metadata
 		metadata := map[string]interface{}{
 			"method":    method,
