@@ -234,7 +234,7 @@ func (u *UsageFlowAPI) GuessLedgerId(c *gin.Context) string {
 	url := GetPatternedURL(c)
 
 	if true {
-		return fmt.Sprintf("%s-%s", method, url)
+		return fmt.Sprintf("%s %s", method, url)
 	}
 
 	getSubFromBearerToken := func(token string) string {
