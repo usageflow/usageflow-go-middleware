@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"io/ioutil"
 	"net/http"
 	"regexp"
 	"strings"
@@ -22,12 +24,51 @@ type Route struct {
 }
 
 type UsageFlowAPI struct {
-	APIKey string `json:"apiKey"`
+	APIKey        string `json:"apiKey"`
+	ApplicationId string `json:"applicationId"`
+}
+
+type verifyResponse struct {
+	AccountId     string `json:"accountId"`
+	ApplicationId string `json:"applicationId"`
 }
 
 func (u *UsageFlowAPI) Init(apiKey string) {
 	// Initialize your API client
 	u.APIKey = apiKey
+
+}
+
+func verifyAPIRequest(apiKey string) (*verifyResponse, error) { // Make the request
+	// req, err := http.NewRequest("GET", "http://127.0.0.1:9000/api/v1/iam/account/api/verify", nil)
+	req, err := http.NewRequest("GET", "https://api.usageflow.io/api/v1/iam/account/api/verify", nil)
+
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Set("x-usage-key", apiKey)
+	req.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := ioutil.ReadAll(resp.Body)
+		return nil, errors.New("failed to verify: " + string(body))
+	}
+
+	// Parse response
+	var verifyResp verifyResponse
+	if err := json.NewDecoder(resp.Body).Decode(&verifyResp); err != nil {
+		return nil, err
+	}
+
+	return &verifyResp, nil
 }
 
 // Middleware for intercepting requests before they reach the user's routes
@@ -39,6 +80,12 @@ func (u UsageFlowAPI) RequestInterceptor(routes, whiteListRoutes []Route) gin.Ha
 
 	// Combine provided whiteListRoutes with the default ones
 	whiteListRoutes = append(whiteListRoutes, defaultWhiteListRoutes...)
+
+	apiVerifyResponse, err := verifyAPIRequest(u.APIKey)
+
+	if err != nil {
+		u.ApplicationId = apiVerifyResponse.ApplicationId
+	}
 
 	// Convert routes and whi
 	routesMap := make(map[string]map[string]bool) // Method -> URL -> exists
@@ -114,12 +161,13 @@ func (u UsageFlowAPI) RequestInterceptor(routes, whiteListRoutes []Route) gin.Ha
 		}
 		// Collect metadata
 		metadata := map[string]interface{}{
-			"method":    method,
-			"url":       url,                // Route pattern (e.g., /api/v1/ledgers/:id)
-			"rawUrl":    c.Request.URL.Path, // Raw URL (e.g., /api/v1/ledgers/123)
-			"clientIP":  c.ClientIP(),
-			"userAgent": c.GetHeader("User-Agent"),       // User-Agent header
-			"timestamp": time.Now().Format(time.RFC3339), // Timestamp of the request
+			"applicationId": u.ApplicationId,
+			"method":        method,
+			"url":           url,                // Route pattern (e.g., /api/v1/ledgers/:id)
+			"rawUrl":        c.Request.URL.Path, // Raw URL (e.g., /api/v1/ledgers/123)
+			"clientIP":      c.ClientIP(),
+			"userAgent":     c.GetHeader("User-Agent"),       // User-Agent header
+			"timestamp":     time.Now().Format(time.RFC3339), // Timestamp of the request
 		}
 
 		// Extract query parameters
