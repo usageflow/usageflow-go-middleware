@@ -81,11 +81,11 @@ func (u UsageFlowAPI) RequestInterceptor(routes, whiteListRoutes []Route) gin.Ha
 	// Combine provided whiteListRoutes with the default ones
 	whiteListRoutes = append(whiteListRoutes, defaultWhiteListRoutes...)
 
-	apiVerifyResponse, err := verifyAPIRequest(u.APIKey)
+	// apiVerifyResponse, err := verifyAPIRequest(u.APIKey)
 
-	if err != nil {
-		u.ApplicationId = apiVerifyResponse.ApplicationId
-	}
+	// if err != nil {
+	// u.ApplicationId = apiVerifyResponse.ApplicationId
+	// }
 
 	// Convert routes and whi
 	routesMap := make(map[string]map[string]bool) // Method -> URL -> exists
