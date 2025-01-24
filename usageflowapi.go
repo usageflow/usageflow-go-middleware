@@ -115,8 +115,8 @@ func (u UsageFlowAPI) RequestInterceptor(routes, whiteListRoutes []Route) gin.Ha
 		// Collect metadata
 		metadata := map[string]interface{}{
 			"method":    method,
-			"url":       GetPatternedURL(c), // Route pattern (e.g., /api/v1/ledgers/:id)
-			"rawUrl":    url,                // Raw URL (e.g., /api/v1/ledgers/123)
+			"url":       url,                  // Route pattern (e.g., /api/v1/ledgers/:id)
+			"rawUrl":    c.Request.RequestURI, // Raw URL (e.g., /api/v1/ledgers/123)
 			"clientIP":  c.ClientIP(),
 			"userAgent": c.GetHeader("User-Agent"),       // User-Agent header
 			"timestamp": time.Now().Format(time.RFC3339), // Timestamp of the request
