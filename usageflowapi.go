@@ -24,8 +24,9 @@ type Route struct {
 }
 
 type UsageFlowAPI struct {
-	APIKey        string `json:"apiKey"`
-	ApplicationId string `json:"applicationId"`
+	APIKey        string             `json:"apiKey"`
+	ApplicationId string             `json:"applicationId"`
+	ApiConfig     *ApiConfigStrategy `json:"apiConfig"`
 }
 
 type verifyResponse struct {
@@ -36,12 +37,60 @@ type verifyResponse struct {
 func (u *UsageFlowAPI) Init(apiKey string) {
 	// Initialize your API client
 	u.APIKey = apiKey
-
 }
 
-func verifyAPIRequest(apiKey string) (*verifyResponse, error) { // Make the request
-	// req, err := http.NewRequest("GET", "http://127.0.0.1:9000/api/v1/iam/account/api/verify", nil)
-	req, err := http.NewRequest("GET", "https://api.usageflow.io/api/v1/iam/account/api/verify", nil)
+type ApiConfigStrategy struct {
+	ID                    string                 `bson:"_id" json:"_id"`
+	Name                  string                 `bson:"name" json:"name"`
+	AccountId             string                 `bson:"accountId" json:"accountId"`
+	IdentityFieldName     string                 `bson:"identityFieldName" json:"identityFieldName"`
+	IdentityFieldLocation string                 `bson:"identityFieldLocation" json:"identityFieldLocation"`
+	ConfigData            map[string]interface{} `bson:"configData" json:"configData"`
+	CreatedAt             int64                  `bson:"createdAt" json:"createdAt"`
+	UpdatedAt             int64                  `bson:"updatedAt" json:"updatedAt"`
+	DeletedAt             *int64                 `bson:"deletedAt" json:"deletedAt"`
+}
+
+func ExtractBearerToken(ctx *gin.Context) (string, error) {
+	authHeader := ctx.GetHeader("Authorization")
+	if authHeader == "" {
+		return "", fmt.Errorf("Authorization header is missing")
+	}
+
+	// Check if it starts with "Bearer "
+	parts := strings.Split(authHeader, " ")
+	if len(parts) != 2 || strings.ToLower(parts[0]) != "bearer" {
+		return "", fmt.Errorf("Invalid Authorization header format")
+	}
+
+	return parts[1], nil
+}
+
+// DecodeJWTUnverified decodes a JWT without verifying its signature
+func DecodeJWTUnverified(token string) (map[string]interface{}, error) {
+	parts := strings.Split(token, ".")
+	if len(parts) != 3 {
+		return nil, fmt.Errorf("Invalid JWT format")
+	}
+
+	// Decode the payload (second part of the token)
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return nil, fmt.Errorf("Failed to decode JWT payload: %v", err)
+	}
+
+	// Parse the payload into a map
+	var claims map[string]interface{}
+	if err := json.Unmarshal(payload, &claims); err != nil {
+		return nil, fmt.Errorf("Failed to parse JWT payload: %v", err)
+	}
+
+	return claims, nil
+}
+
+func fetchApiConfig(apiKey string) (*ApiConfigStrategy, error) { // Make the request
+	// req, err := http.NewRequest("GET", "http://127.0.0.1:9000/api/v1/strategies/application", nil)
+	req, err := http.NewRequest("GET", "https://api.usageflow.io/api/v1/strategies/application", nil)
 
 	if err != nil {
 		return nil, err
@@ -63,7 +112,7 @@ func verifyAPIRequest(apiKey string) (*verifyResponse, error) { // Make the requ
 	}
 
 	// Parse response
-	var verifyResp verifyResponse
+	var verifyResp ApiConfigStrategy
 	if err := json.NewDecoder(resp.Body).Decode(&verifyResp); err != nil {
 		return nil, err
 	}
@@ -80,12 +129,6 @@ func (u UsageFlowAPI) RequestInterceptor(routes, whiteListRoutes []Route) gin.Ha
 
 	// Combine provided whiteListRoutes with the default ones
 	whiteListRoutes = append(whiteListRoutes, defaultWhiteListRoutes...)
-
-	// apiVerifyResponse, err := verifyAPIRequest(u.APIKey)
-
-	// if err != nil {
-	// u.ApplicationId = apiVerifyResponse.ApplicationId
-	// }
 
 	// Convert routes and whi
 	routesMap := make(map[string]map[string]bool) // Method -> URL -> exists
@@ -104,6 +147,9 @@ func (u UsageFlowAPI) RequestInterceptor(routes, whiteListRoutes []Route) gin.Ha
 	// Populate the maps
 	populateMap(routesMap, routes)
 	populateMap(whiteListRoutesMap, whiteListRoutes)
+
+	config, _ := fetchApiConfig(u.APIKey)
+	u.ApiConfig = config
 
 	return func(c *gin.Context) {
 		method := c.Request.Method
@@ -159,6 +205,16 @@ func (u UsageFlowAPI) RequestInterceptor(routes, whiteListRoutes []Route) gin.Ha
 		if !routeFound {
 			c.Next()
 		}
+
+		token, _ := ExtractBearerToken(c)
+		claim, err := DecodeJWTUnverified(token)
+
+		if err != nil {
+			fmt.Println("Error", err.Error())
+		} else {
+			fmt.Println("zazi", claim)
+		}
+
 		// Collect metadata
 		metadata := map[string]interface{}{
 			"applicationId": u.ApplicationId,
