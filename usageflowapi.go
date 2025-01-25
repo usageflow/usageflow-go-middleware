@@ -302,6 +302,12 @@ func (u UsageFlowAPI) RequestInterceptor(routes, whiteListRoutes []Route) gin.Ha
 		}
 
 		ledgerId := u.GuessLedgerId(c)
+		userIdentifierPrefix := u.GetUserPrefix(c, method, url)
+
+		if userIdentifierPrefix != "" {
+			ledgerId = fmt.Sprintf("%s %s", userIdentifierPrefix, ledgerId)
+		}
+
 		for _, route := range routes {
 			// Match the method and URL, including wildcards
 			if (route.Method == "*" || strings.ToUpper(route.Method) == method) &&
@@ -555,4 +561,48 @@ func (u UsageFlowAPI) ExecuteFulfillRequestWithMetadata(ledgerId, method, url st
 	}
 
 	return resp.StatusCode >= 200 && resp.StatusCode < 300, nil
+}
+
+func (u *UsageFlowAPI) GetUserPrefix(c *gin.Context, method, url string) string {
+	if u.ApiConfig == nil {
+		return ""
+	}
+
+	location := u.ApiConfig.IdentityFieldLocation
+	valueKey := u.ApiConfig.IdentityFieldName
+
+	switch location {
+	case "bearer_token":
+		// Extract from bearer token
+		token, _ := ExtractBearerToken(c)
+		unverifiedToken, err := DecodeJWTUnverified(token)
+		if err == nil {
+			if identifierValue, ok := unverifiedToken[valueKey].(string); ok && identifierValue != "" {
+				return identifierValue
+			}
+		}
+	case "path":
+		// Extract from path parameter
+		identifierValue := c.Param(valueKey)
+		if identifierValue != "" {
+			return identifierValue
+		}
+	case "query_params":
+		// Extract from query parameters
+		identifierValue := c.Query(valueKey)
+		if identifierValue != "" {
+			return identifierValue
+		}
+	case "headers":
+		// Extract from headers
+		identifierValue := c.GetHeader(valueKey)
+		if identifierValue != "" {
+			return identifierValue
+		}
+	default:
+		// Unsupported location
+		return ""
+	}
+
+	return ""
 }
