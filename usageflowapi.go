@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -27,6 +28,7 @@ type UsageFlowAPI struct {
 	APIKey        string             `json:"apiKey"`
 	ApplicationId string             `json:"applicationId"`
 	ApiConfig     *ApiConfigStrategy `json:"apiConfig"`
+	mu            sync.RWMutex
 }
 
 type verifyResponse struct {
@@ -120,6 +122,26 @@ func fetchApiConfig(apiKey string) (*ApiConfigStrategy, error) { // Make the req
 	return &verifyResp, nil
 }
 
+func (u *UsageFlowAPI) StartConfigUpdater() {
+	go func() {
+		ticker := time.NewTicker(1 * time.Minute) // Fetch every 1 minute
+		defer ticker.Stop()
+
+		for range ticker.C {
+			config, err := fetchApiConfig(u.APIKey)
+			if err != nil {
+				// Handle error (log or retry logic)
+				continue
+			}
+
+			// Safely update the config
+			u.mu.Lock()
+			u.ApiConfig = config
+			u.mu.Unlock()
+		}
+	}()
+}
+
 // Middleware for intercepting requests before they reach the user's routes
 func (u UsageFlowAPI) RequestInterceptor(routes, whiteListRoutes []Route) gin.HandlerFunc {
 	defaultWhiteListRoutes := []Route{
@@ -148,8 +170,7 @@ func (u UsageFlowAPI) RequestInterceptor(routes, whiteListRoutes []Route) gin.Ha
 	populateMap(routesMap, routes)
 	populateMap(whiteListRoutesMap, whiteListRoutes)
 
-	config, _ := fetchApiConfig(u.APIKey)
-	u.ApiConfig = config
+	u.StartConfigUpdater()
 
 	return func(c *gin.Context) {
 		method := c.Request.Method
@@ -158,6 +179,24 @@ func (u UsageFlowAPI) RequestInterceptor(routes, whiteListRoutes []Route) gin.Ha
 		if len(routesMap) == 0 {
 			c.Next()
 			return
+		}
+
+		u.mu.RLock()
+		config := u.ApiConfig
+		u.mu.RUnlock()
+
+		if config == nil {
+			newConfig, err := fetchApiConfig(u.APIKey)
+			if err != nil {
+				// Handle error (e.g., return 500 or log it)
+				c.JSON(500, gin.H{"error": "Failed to fetch API configuration"})
+				return
+			}
+
+			// Safely update the config
+			u.mu.Lock()
+			u.ApiConfig = newConfig
+			u.mu.Unlock()
 		}
 
 		// Check if the current request matches any route in the whitelist
