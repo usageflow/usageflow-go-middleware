@@ -175,6 +175,13 @@ func (u UsageFlowAPI) RequestInterceptor(routes, whiteListRoutes []Route) gin.Ha
 
 	u.StartConfigUpdater()
 
+	newConfig, _ := fetchApiConfig(u.APIKey)
+
+	// Safely update the config
+	u.mu.Lock()
+	u.ApiConfig = newConfig
+	u.mu.Unlock()
+
 	return func(c *gin.Context) {
 		method := c.Request.Method
 		url := GetPatternedURL(c)
@@ -184,23 +191,23 @@ func (u UsageFlowAPI) RequestInterceptor(routes, whiteListRoutes []Route) gin.Ha
 			return
 		}
 
-		u.mu.RLock()
-		config := u.ApiConfig
-		u.mu.RUnlock()
+		// u.mu.RLock()
+		// config := u.ApiConfig
+		// u.mu.RUnlock()
 
-		if config == nil {
-			newConfig, err := fetchApiConfig(u.APIKey)
-			if err != nil {
-				// Handle error (e.g., return 500 or log it)
-				c.JSON(500, gin.H{"error": "Failed to fetch API configuration"})
-				return
-			}
+		// if config == nil {
+		// 	newConfig, err := fetchApiConfig(u.APIKey)
+		// 	if err != nil {
+		// 		// Handle error (e.g., return 500 or log it)
+		// 		c.JSON(500, gin.H{"error": "Failed to fetch API configuration"})
+		// 		return
+		// 	}
 
-			// Safely update the config
-			u.mu.Lock()
-			u.ApiConfig = newConfig
-			u.mu.Unlock()
-		}
+		// 	// Safely update the config
+		// 	u.mu.Lock()
+		// 	u.ApiConfig = newConfig
+		// 	u.mu.Unlock()
+		// }
 
 		// Check if the current request matches any route in the whitelist
 		if methodRoutes, exists := whiteListRoutesMap[method]; exists {
