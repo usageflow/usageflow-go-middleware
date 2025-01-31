@@ -53,6 +53,8 @@ type ApiConfigStrategy struct {
 	DeletedAt             *int64                 `bson:"deletedAt" json:"deletedAt"`
 }
 
+var once sync.Once
+
 func ExtractBearerToken(ctx *gin.Context) (string, error) {
 	authHeader := ctx.GetHeader("Authorization")
 	if authHeader == "" {
@@ -123,23 +125,24 @@ func fetchApiConfig(apiKey string) (*ApiConfigStrategy, error) { // Make the req
 }
 
 func (u *UsageFlowAPI) StartConfigUpdater() {
-	go func() {
-		ticker := time.NewTicker(1 * time.Minute) // Fetch every 1 minute
-		defer ticker.Stop()
+	once.Do(func() { // Ensures this runs only once
+		go func() {
+			ticker := time.NewTicker(1 * time.Minute)
+			defer ticker.Stop()
 
-		for range ticker.C {
-			config, err := fetchApiConfig(u.APIKey)
-			if err != nil {
-				// Handle error (log or retry logic)
-				continue
+			for range ticker.C {
+				config, err := fetchApiConfig(u.APIKey)
+				if err != nil {
+					// Handle error
+					continue
+				}
+
+				u.mu.Lock()
+				u.ApiConfig = config
+				u.mu.Unlock()
 			}
-
-			// Safely update the config
-			u.mu.Lock()
-			u.ApiConfig = config
-			u.mu.Unlock()
-		}
-	}()
+		}()
+	})
 }
 
 // Middleware for intercepting requests before they reach the user's routes
