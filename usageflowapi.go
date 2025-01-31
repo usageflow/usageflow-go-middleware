@@ -547,6 +547,8 @@ func (u UsageFlowAPI) ExecuteFulfillRequestWithMetadata(ledgerId, method, url st
 	apiURL := "https://api.usageflow.io/api/v1/ledgers/measure/allocate/use"
 	// apiURL := "http://127.0.0.1:9000/api/v1/ledgers/measure/allocate/use"
 
+	metadata["responseStatusCode"] = ExtractResponseStatusCode(c)
+
 	allocationId, _ := c.Get("eventId")
 	// Set headers
 	headers := map[string]string{
@@ -644,4 +646,8 @@ func (u *UsageFlowAPI) GetUserPrefix(c *gin.Context, method, url string) string 
 	}
 
 	return ""
+}
+
+func ExtractResponseStatusCode(c *gin.Context) int {
+	return c.Writer.Status()
 }
