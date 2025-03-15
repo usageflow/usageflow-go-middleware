@@ -3,6 +3,8 @@
 [![Go Reference](https://pkg.go.dev/badge/github.com/usageflow/usageflow-go-middleware.svg)](https://pkg.go.dev/github.com/usageflow/usageflow-go-middleware)
 [![Go Report Card](https://goreportcard.com/badge/github.com/usageflow/usageflow-go-middleware)](https://goreportcard.com/report/github.com/usageflow/usageflow-go-middleware)
 
+**Note: This is a beta version of the UsageFlow Go Middleware. Bugs may be present, and the API is subject to change.**
+
 A Go middleware package for integrating UsageFlow API with your Gin web applications. This middleware helps you track and manage API usage, implement rate limiting, and handle authentication seamlessly.
 
 ## Features
