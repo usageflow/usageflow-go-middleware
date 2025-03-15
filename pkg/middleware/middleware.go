@@ -7,7 +7,10 @@ import (
 	"io"
 	"io/ioutil"
 	"net/http"
+	"regexp"
+	"strings"
 	"sync"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/usageflow/usageflow-go-middleware/pkg/api"
@@ -88,7 +91,7 @@ func (u *UsageFlowAPI) RequestInterceptor(routes, whiteListRoutes []config.Route
 		}
 
 		// Process request with UsageFlow logic
-		metadata := collectRequestMetadata(c)
+		metadata := u.collectRequestMetadata(c)
 		ledgerId := u.GuessLedgerId(c)
 		userIdentifierPrefix := u.GetUserPrefix(c, method, url)
 
@@ -96,27 +99,174 @@ func (u *UsageFlowAPI) RequestInterceptor(routes, whiteListRoutes []config.Route
 			ledgerId = fmt.Sprintf("%s %s", userIdentifierPrefix, ledgerId)
 		}
 
-		if err := api.ExecuteRequest(u.APIKey, ledgerId, method, url, metadata); err != nil {
+		// Execute initial allocation request
+		success, err := u.ExecuteRequestWithMetadata(ledgerId, method, url, metadata, c)
+		if err != nil {
 			c.AbortWithStatusJSON(500, gin.H{"error": "Failed to process request"})
 			return
 		}
 
+		if !success {
+			c.AbortWithStatusJSON(400, gin.H{"error": "Request allocation failed"})
+			return
+		}
+
+		// Process the original request
 		c.Next()
+
+		// After the request is processed, execute the fulfill request
+		metadata["responseStatusCode"] = c.Writer.Status()
+		if _, err := u.ExecuteFulfillRequestWithMetadata(ledgerId, method, url, metadata, c); err != nil {
+			// Log the error but don't abort since the main request has already been processed
+			fmt.Printf("Failed to fulfill request: %v\n", err)
+		}
 	}
 }
 
-// collectRequestMetadata gathers metadata from the request
-func collectRequestMetadata(c *gin.Context) map[string]interface{} {
-	metadata := make(map[string]interface{})
+// ExecuteRequestWithMetadata executes the initial allocation request
+func (u *UsageFlowAPI) ExecuteRequestWithMetadata(ledgerId, method, url string, metadata map[string]interface{}, c *gin.Context) (bool, error) {
+	apiURL := "https://api.usageflow.io/api/v1/ledgers/measure/allocate"
 
-	// Collect headers
-	headers := make(map[string]string)
-	for k, v := range c.Request.Header {
-		if len(v) > 0 {
-			headers[k] = v[0]
+	payload := map[string]interface{}{
+		"alias":  ledgerId,
+		"amount": 1,
+	}
+
+	payloadBytes, err := json.Marshal(payload)
+	if err != nil {
+		return false, fmt.Errorf("failed to marshal request payload: %v", err)
+	}
+
+	req, err := http.NewRequest("POST", apiURL, bytes.NewBuffer(payloadBytes))
+	if err != nil {
+		return false, err
+	}
+
+	req.Header.Set("x-usage-key", u.APIKey)
+	req.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return false, err
+	}
+	defer resp.Body.Close()
+
+	bodyBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return false, err
+	}
+
+	var responseData map[string]interface{}
+	if err := json.Unmarshal(bodyBytes, &responseData); err == nil {
+		if eventId, exists := responseData["eventId"]; exists {
+			c.Set("eventId", eventId)
 		}
 	}
-	metadata["headers"] = headers
+
+	return resp.StatusCode >= 200 && resp.StatusCode < 300, nil
+}
+
+// ExecuteFulfillRequestWithMetadata executes the fulfill request after the main request is processed
+func (u *UsageFlowAPI) ExecuteFulfillRequestWithMetadata(ledgerId, method, url string, metadata map[string]interface{}, c *gin.Context) (bool, error) {
+	apiURL := "https://api.usageflow.io/api/v1/ledgers/measure/allocate/use"
+
+	allocationId, exists := c.Get("eventId")
+	if !exists {
+		return false, fmt.Errorf("no allocation ID found")
+	}
+
+	payload := map[string]interface{}{
+		"alias":        ledgerId,
+		"amount":       1,
+		"allocationId": allocationId.(string),
+		"metadata":     metadata,
+	}
+
+	payloadBytes, err := json.Marshal(payload)
+	if err != nil {
+		return false, fmt.Errorf("failed to marshal fulfill payload: %v", err)
+	}
+
+	req, err := http.NewRequest("POST", apiURL, bytes.NewBuffer(payloadBytes))
+	if err != nil {
+		return false, err
+	}
+
+	req.Header.Set("x-usage-key", u.APIKey)
+	req.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return false, err
+	}
+	defer resp.Body.Close()
+
+	bodyBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return false, err
+	}
+
+	var responseData map[string]interface{}
+	if err := json.Unmarshal(bodyBytes, &responseData); err == nil {
+		if eventId, exists := responseData["eventId"]; exists {
+			c.Set("eventId", eventId)
+		}
+	}
+
+	return resp.StatusCode >= 200 && resp.StatusCode < 300, nil
+}
+
+// collectRequestMetadata gathers metadata from the request
+func (u *UsageFlowAPI) collectRequestMetadata(c *gin.Context) map[string]interface{} {
+	metadata := map[string]interface{}{
+		"applicationId": u.ApplicationId,
+		"method":        c.Request.Method,
+		"url":           GetPatternedURL(c), // Route pattern
+		"rawUrl":        c.Request.URL.Path, // Raw URL
+		"clientIP":      c.ClientIP(),
+		"userAgent":     c.GetHeader("User-Agent"),
+		"timestamp":     time.Now().Format(time.RFC3339),
+	}
+
+	// Collect headers
+	headers := c.Request.Header
+	if len(headers) > 0 {
+		// Create a copy of headers to avoid modifying the original
+		sanitizedHeaders := make(map[string][]string)
+
+		// Compile the regular expression for matching keys
+		keyRegex := regexp.MustCompile(`(?i)^x-.*key$`) // (?i) makes it case-insensitive
+
+		for key, values := range headers {
+			// Normalize the header key to lowercase for comparison
+			keyLower := strings.ToLower(key)
+
+			// Mask specific headers based on conditions
+			switch keyLower {
+			case "authorization":
+				// Mask "Authorization" header
+				if len(values) > 0 {
+					sanitizedHeaders[key] = []string{"Bearer ****"}
+				}
+			default:
+				// Check if the key matches the regex for x-*key
+				if keyRegex.MatchString(key) {
+					// Mask headers matching the regex
+					if len(values) > 0 {
+						sanitizedHeaders[key] = []string{"****"}
+					}
+				} else {
+					// For other headers, include them as is
+					sanitizedHeaders[key] = values
+				}
+			}
+		}
+
+		// Add sanitized headers to metadata
+		metadata["headers"] = sanitizedHeaders
+	}
 
 	// Collect query parameters
 	queryParams := make(map[string]string)
@@ -126,6 +276,16 @@ func collectRequestMetadata(c *gin.Context) map[string]interface{} {
 		}
 	}
 	metadata["queryParams"] = queryParams
+
+	if params := c.Params; len(params) > 0 {
+		if params := c.Params; len(params) > 0 {
+			paramsMap := make(map[string]string)
+			for _, param := range params {
+				paramsMap[param.Key] = param.Value
+			}
+			metadata["pathParams"] = paramsMap
+		}
+	}
 
 	// Collect request body if present
 	if c.Request.Body != nil && c.Request.Body != http.NoBody {
@@ -155,30 +315,7 @@ func (u *UsageFlowAPI) GuessLedgerId(c *gin.Context) string {
 	method := c.Request.Method
 	url := GetPatternedURL(c)
 
-	// if true {
 	return fmt.Sprintf("%s %s", method, url)
-	// }
-
-	// if ledgerId := c.GetHeader("x-ledger-id"); ledgerId != "" {
-	// 	return TransformToLedgerId(ledgerId)
-	// }
-
-	// // Try to get from query parameter
-	// if ledgerId := c.Query("ledgerId"); ledgerId != "" {
-	// 	return TransformToLedgerId(ledgerId)
-	// }
-
-	// // Try to get from JWT token
-	// if token, err := ExtractBearerToken(c); err == nil {
-	// 	if claims, err := DecodeJWTUnverified(token); err == nil {
-	// 		if ledgerId, ok := claims["sub"].(string); ok {
-	// 			return TransformToLedgerId(ledgerId)
-	// 		}
-	// 	}
-	// }
-
-	// // Default to empty string if no ledger ID found
-	// return ""
 }
 
 func isWhitelisted(method, url string, whiteListMap map[string]map[string]bool) bool {
