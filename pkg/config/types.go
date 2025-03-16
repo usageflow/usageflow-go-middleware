@@ -1,5 +1,7 @@
 package config
 
+import "errors"
+
 // ApiConfigStrategy represents the configuration strategy for the API
 type ApiConfigStrategy struct {
 	ID                    string                 `bson:"_id" json:"_id"`
@@ -17,6 +19,17 @@ type ApiConfigStrategy struct {
 type Route struct {
 	Method string
 	URL    string
+}
+
+// Validate checks if the route configuration is valid
+func (r *Route) Validate() error {
+	if r.Method == "" {
+		return errors.New("method is required")
+	}
+	if r.URL == "" {
+		return errors.New("URL is required")
+	}
+	return nil
 }
 
 // VerifyResponse represents the response from the verification endpoint

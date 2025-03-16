@@ -12,7 +12,8 @@ import (
 	"github.com/usageflow/usageflow-go-middleware/pkg/config"
 )
 
-const (
+var (
+	// BaseURL is the base URL for the UsageFlow API
 	BaseURL = "https://api.usageflow.io/api/v1"
 )
 
