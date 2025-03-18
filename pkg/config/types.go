@@ -5,6 +5,7 @@ type ApiConfigStrategy struct {
 	ID                    string                 `bson:"_id" json:"_id"`
 	Name                  string                 `bson:"name" json:"name"`
 	AccountId             string                 `bson:"accountId" json:"accountId"`
+	ApplicationId         string                 `bson:"applicationId" json:"applicationId"`
 	IdentityFieldName     string                 `bson:"identityFieldName" json:"identityFieldName"`
 	IdentityFieldLocation string                 `bson:"identityFieldLocation" json:"identityFieldLocation"`
 	ConfigData            map[string]interface{} `bson:"configData" json:"configData"`

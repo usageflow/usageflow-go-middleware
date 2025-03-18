@@ -21,7 +21,7 @@ var (
 func (u *UsageFlowAPI) StartConfigUpdater() {
 	once.Do(func() {
 		go func() {
-			ticker := time.NewTicker(1 * time.Minute)
+			ticker := time.NewTicker(30 * time.Second)
 			defer ticker.Stop()
 
 			for range ticker.C {
@@ -32,6 +32,7 @@ func (u *UsageFlowAPI) StartConfigUpdater() {
 
 				u.mu.Lock()
 				u.ApiConfig = config
+				u.ApplicationId = config.ApplicationId
 				u.mu.Unlock()
 			}
 		}()

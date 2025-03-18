@@ -25,6 +25,10 @@ type UsageFlowAPI struct {
 	mu            sync.RWMutex
 }
 
+const (
+	baseURL = "https://api.usageflow.io/api/v1"
+)
+
 // New creates a new instance of UsageFlowAPI
 func New(apiKey string) *UsageFlowAPI {
 	api := &UsageFlowAPI{}
@@ -93,10 +97,10 @@ func (u *UsageFlowAPI) RequestInterceptor(routes, whiteListRoutes []config.Route
 		// Process request with UsageFlow logic
 		metadata := u.collectRequestMetadata(c)
 		ledgerId := u.GuessLedgerId(c)
-		userIdentifierPrefix := u.GetUserPrefix(c, method, url)
+		userIdentifierSuffix := u.GetUserPrefix(c, method, url)
 
-		if userIdentifierPrefix != "" {
-			ledgerId = fmt.Sprintf("%s %s", userIdentifierPrefix, ledgerId)
+		if userIdentifierSuffix != "" {
+			ledgerId = fmt.Sprintf("%s %s", ledgerId, userIdentifierSuffix)
 		}
 
 		// Execute initial allocation request
@@ -125,7 +129,7 @@ func (u *UsageFlowAPI) RequestInterceptor(routes, whiteListRoutes []config.Route
 
 // ExecuteRequestWithMetadata executes the initial allocation request
 func (u *UsageFlowAPI) ExecuteRequestWithMetadata(ledgerId, method, url string, metadata map[string]interface{}, c *gin.Context) (bool, error) {
-	apiURL := "https://api.usageflow.io/api/v1/ledgers/measure/allocate"
+	apiURL := baseURL + "/ledgers/measure/allocate"
 
 	payload := map[string]interface{}{
 		"alias":  ledgerId,
@@ -169,7 +173,7 @@ func (u *UsageFlowAPI) ExecuteRequestWithMetadata(ledgerId, method, url string, 
 
 // ExecuteFulfillRequestWithMetadata executes the fulfill request after the main request is processed
 func (u *UsageFlowAPI) ExecuteFulfillRequestWithMetadata(ledgerId, method, url string, metadata map[string]interface{}, c *gin.Context) (bool, error) {
-	apiURL := "https://api.usageflow.io/api/v1/ledgers/measure/allocate/use"
+	apiURL := baseURL + "/ledgers/measure/allocate/use"
 
 	allocationId, exists := c.Get("eventId")
 	if !exists {
@@ -367,6 +371,7 @@ func (u *UsageFlowAPI) GetUserPrefix(c *gin.Context, method, url string) string 
 	u.mu.RUnlock()
 
 	if config == nil {
+		// TODO: Remove this when fixing the config issue
 		return ""
 	}
 
@@ -390,7 +395,7 @@ func (u *UsageFlowAPI) GetUserPrefix(c *gin.Context, method, url string) string 
 		if body, err := GetRequestBody(c); err == nil {
 			c.Request.Body = ioutil.NopCloser(bytes.NewBufferString(body))
 		}
-	case "jwt":
+	case "bearer_token":
 		if token, err := ExtractBearerToken(c); err == nil {
 			if claims, err := DecodeJWTUnverified(token); err == nil {
 				if val, ok := claims[config.IdentityFieldName]; ok {
