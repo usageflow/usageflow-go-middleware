@@ -124,6 +124,9 @@ func (u *UsageFlowAPI) RequestInterceptor(routes, whiteListRoutes []config.Route
 
 		// After the request is processed, execute the fulfill request
 		metadata["responseStatusCode"] = c.Writer.Status()
+
+		// Store the request duration in milliseconds
+
 		if _, err := u.ExecuteFulfillRequestWithMetadata(ledgerId, method, url, metadata, c); err != nil {
 			// Log the error but don't abort since the main request has already been processed
 			fmt.Printf("Failed to fulfill request: %v\n", err)
@@ -187,7 +190,7 @@ func (u *UsageFlowAPI) ExecuteFulfillRequestWithMetadata(ledgerId, method, url s
 	startTime, exists := c.Get("usageflowStartTime")
 	if exists {
 		requestDuration := time.Since(startTime.(time.Time))
-		metadata["requestDuration"] = requestDuration.String()
+		metadata["requestDuration"] = requestDuration.Milliseconds() // Store as milliseconds
 	}
 
 	payload := map[string]interface{}{
