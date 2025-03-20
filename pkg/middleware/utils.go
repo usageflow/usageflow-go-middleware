@@ -44,7 +44,11 @@ func GetPatternedURL(c *gin.Context) string {
 	// You can implement custom URL pattern matching here
 	// For example, convert dynamic segments to placeholders
 	// Currently returning the raw path
-	return c.Request.URL.Path
+	pattern := c.FullPath()
+	if pattern == "" {
+		return c.Request.URL.Path // Fallback to actual path if no pattern is found
+	}
+	return pattern
 }
 
 // ExtractBearerToken extracts the bearer token from the Authorization header
