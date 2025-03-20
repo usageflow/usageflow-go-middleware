@@ -94,6 +94,10 @@ func (u *UsageFlowAPI) RequestInterceptor(routes, whiteListRoutes []config.Route
 			return
 		}
 
+		//Capture the time before the request is processed
+		startTime := time.Now()
+		c.Set("usageflowStartTime", startTime)
+
 		// Process request with UsageFlow logic
 		metadata := u.collectRequestMetadata(c)
 		ledgerId := u.GuessLedgerId(c)
@@ -178,6 +182,12 @@ func (u *UsageFlowAPI) ExecuteFulfillRequestWithMetadata(ledgerId, method, url s
 	allocationId, exists := c.Get("eventId")
 	if !exists {
 		return false, fmt.Errorf("no allocation ID found")
+	}
+
+	startTime, exists := c.Get("usageflowStartTime")
+	if exists {
+		requestDuration := time.Since(startTime.(time.Time))
+		metadata["requestDuration"] = requestDuration.String()
 	}
 
 	payload := map[string]interface{}{
