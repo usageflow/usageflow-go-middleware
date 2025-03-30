@@ -3,9 +3,7 @@
 [![Go Reference](https://pkg.go.dev/badge/github.com/usageflow/usageflow-go-middleware.svg)](https://pkg.go.dev/github.com/usageflow/usageflow-go-middleware)
 [![Go Report Card](https://goreportcard.com/badge/github.com/usageflow/usageflow-go-middleware)](https://goreportcard.com/report/github.com/usageflow/usageflow-go-middleware)
 
-**Note: This is a beta version of the UsageFlow Go Middleware. Bugs may be present, and the API is subject to change.**
-
-A Go middleware package for integrating UsageFlow API with your Gin web applications. This middleware helps you track and manage API usage, implement rate limiting, and handle authentication seamlessly.
+A powerful Go middleware package for integrating UsageFlow API with your Gin web applications. This middleware helps you track and manage API usage, implement rate limiting, and handle authentication seamlessly.
 
 ## Features
 
@@ -16,6 +14,10 @@ A Go middleware package for integrating UsageFlow API with your Gin web applicat
 - Configurable route whitelisting
 - Thread-safe configuration management
 - Automatic config updates
+- Endpoint-specific policy management
+- Rate limiting per endpoint
+- Identity field extraction from various sources
+- Request body preservation
 
 ## Installation
 
@@ -38,8 +40,7 @@ func main() {
     r := gin.Default()
 
     // Initialize UsageFlow
-    uf := &usageflow.UsageFlowAPI{}
-    uf.Init("your-api-key")
+    uf := usageflow.New("your-api-key")
 
     // Define routes to monitor
     routes := []usageflow.Route{
@@ -64,21 +65,54 @@ func main() {
 }
 ```
 
-## Configuration
+## Usage Guide
+
+### Basic Configuration
 
 The middleware can be configured with various options:
 
 ```go
 type UsageFlowAPI struct {
-    APIKey        string
-    ApplicationId string
-    ApiConfig     *ApiConfigStrategy
+    APIKey                      string
+    ApplicationId               string
+    ApiConfig                   *ApiConfigStrategy
+    ApplicationEndpointPolicies *PolicyResponse
 }
 ```
 
-## Documentation
+### Policy Management
 
-For detailed documentation and examples, please visit our [documentation site](https://docs.usageflow.io).
+The middleware supports endpoint-specific policies that can override the base configuration:
+
+```go
+type ApplicationEndpointPolicy struct {
+    PolicyId           string
+    AccountId          string
+    ApplicationId      string
+    EndpointPattern    string
+    EndpointMethod     string
+    IdentityField      string
+    IdentityLocation   string
+    RateLimit          int
+    RateLimitInterval  string
+    MeteringExpression string
+    MeteringTrigger    string
+    StripePriceId      string
+    StripeCustomerId   string
+    CreatedAt          int64
+    UpdatedAt          int64
+}
+```
+
+### Identity Field Locations
+
+The middleware supports extracting identity fields from various locations:
+
+- Header
+- Query parameters
+- Path parameters
+- Request body
+- Bearer token (JWT)
 
 ### Route Configuration
 
@@ -103,6 +137,35 @@ whiteList := []usageflow.Route{
 }
 ```
 
+### Request Body Handling
+
+When working with request bodies, the middleware preserves the body for subsequent handlers:
+
+```go
+// In your handler
+var newUser User
+if err := c.ShouldBindJSON(&newUser); err != nil {
+    c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid input"})
+    return
+}
+// The body is preserved and can be read again if needed
+```
+
+### Policy Updates
+
+Policies are automatically updated every 30 seconds. You can also manually fetch policies:
+
+```go
+policies, err := uf.GetApplicationEndpointPolicies()
+if err != nil {
+    // Handle error
+}
+```
+
+## Documentation
+
+For detailed documentation and examples, please visit our [documentation site](https://docs.usageflow.io).
+
 ## Contributing
 
 Contributions are welcome! Please feel free to submit a Pull Request.
@@ -110,3 +173,7 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 ## License
 
 This project is licensed under the MIT License - see the LICENSE file for details.
+
+## Release Notes
+
+For detailed release notes and migration guides, please see [RELEASE_NOTES.md](RELEASE_NOTES.md).

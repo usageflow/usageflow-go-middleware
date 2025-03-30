@@ -13,7 +13,7 @@ func main() {
 	r := gin.Default()
 
 	// Initialize UsageFlow middleware
-	uf := middleware.New("your-api-key")
+	uf := middleware.New("eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhY2NvdW50SWQiOiI2N2RkZTkzN2E4NDNjMmJhOTM3NzE3MmEiLCJleHAiOjE3NDI4NTY5MDUsImtleUlkIjoiNjdkZGVlNDlhODQzYzJiYTkzNzcxNzJmIiwicGVybWlzc2lvbnMiOlsiYWxsIl19.Q48PBbGlESjn2Sz5izlOGNPhko8o1yNy3lgquX9O9oM")
 
 	// Define routes to monitor
 	routes := []config.Route{

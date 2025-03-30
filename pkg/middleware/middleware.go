@@ -17,12 +17,17 @@ import (
 	"github.com/usageflow/usageflow-go-middleware/pkg/config"
 )
 
+// PolicyMap represents a map of endpoint patterns to their corresponding policies
+type PolicyMap map[string]*config.ApplicationEndpointPolicy
+
 // UsageFlowAPI represents the main middleware structure
 type UsageFlowAPI struct {
-	APIKey        string                    `json:"apiKey"`
-	ApplicationId string                    `json:"applicationId"`
-	ApiConfig     *config.ApiConfigStrategy `json:"apiConfig"`
-	mu            sync.RWMutex
+	APIKey                      string                    `json:"apiKey"`
+	ApplicationId               string                    `json:"applicationId"`
+	ApiConfig                   *config.ApiConfigStrategy `json:"apiConfig"`
+	ApplicationEndpointPolicies *config.PolicyResponse    `json:"applicationEndpointPolicies"`
+	policyMap                   PolicyMap
+	mu                          sync.RWMutex
 }
 
 const (
@@ -31,7 +36,9 @@ const (
 
 // New creates a new instance of UsageFlowAPI
 func New(apiKey string) *UsageFlowAPI {
-	api := &UsageFlowAPI{}
+	api := &UsageFlowAPI{
+		policyMap: make(PolicyMap),
+	}
 	api.Init(apiKey)
 	return api
 }
@@ -381,19 +388,79 @@ func (u *UsageFlowAPI) processRequest(c *gin.Context, method, url string) error 
 func (u *UsageFlowAPI) GetUserPrefix(c *gin.Context, method, url string) string {
 	u.mu.RLock()
 	config := u.ApiConfig
+	policyMap := u.policyMap
 	u.mu.RUnlock()
 
 	if config == nil {
-		// TODO: Remove this when fixing the config issue
 		return ""
 	}
 
-	// Get the identifier based on the configured location
+	// First try to find a matching policy using the map
+	policyKey := fmt.Sprintf("%s:%s", method, url)
+	policy, ok := policyMap[policyKey]
+	if ok {
+		policyMethod := strings.Split(policyKey, ":")[0]
+		policyPattern := strings.Split(policyKey, ":")[1]
+
+		if policyMethod == method && policyPattern == url {
+			// Found matching policy, use its identity configuration
+			var identifier string
+			switch policy.IdentityLocation {
+			case "header":
+				identifier = c.GetHeader(policy.IdentityField)
+			case "query":
+				identifier = c.Query(policy.IdentityField)
+			case "path_params":
+				identifier = c.Param(policy.IdentityField)
+			case "query_params":
+				identifier = c.Query(policy.IdentityField)
+			case "body":
+				bodyBytes, err := io.ReadAll(c.Request.Body)
+				if err == nil {
+					// Restore the body for further processing
+					c.Request.Body = ioutil.NopCloser(bytes.NewBuffer(bodyBytes))
+
+					// Try to parse as JSON for policy matching
+					var bodyMap map[string]interface{}
+					if err := json.Unmarshal(bodyBytes, &bodyMap); err == nil {
+						// Use bodyMap for your logic
+						if policy.IdentityLocation == "body" {
+							if val, ok := bodyMap[policy.IdentityField]; ok {
+								if strVal, ok := val.(string); ok {
+									identifier = strVal
+								}
+							}
+						}
+					}
+				}
+			case "bearer_token":
+				if token, err := ExtractBearerToken(c); err == nil {
+					if claims, err := DecodeJWTUnverified(token); err == nil {
+						if val, ok := claims[policy.IdentityField]; ok {
+							if strVal, ok := val.(string); ok {
+								identifier = strVal
+							}
+						}
+					}
+				}
+			}
+
+			if identifier != "" {
+				return TransformToLedgerId(identifier)
+			}
+		}
+	}
+
+	// If no matching policy found or no identifier from policy, fall back to base config
 	var identifier string
 	switch config.IdentityFieldLocation {
 	case "header":
 		identifier = c.GetHeader(config.IdentityFieldName)
 	case "query":
+		identifier = c.Query(config.IdentityFieldName)
+	case "path_params":
+		identifier = c.Param(config.IdentityFieldName)
+	case "query_params":
 		identifier = c.Query(config.IdentityFieldName)
 	case "body":
 		var bodyMap map[string]interface{}
@@ -425,4 +492,22 @@ func (u *UsageFlowAPI) GetUserPrefix(c *gin.Context, method, url string) string 
 	}
 
 	return ""
+}
+
+// GetApplicationEndpointPolicies fetches the endpoint policies for the current application
+func (u *UsageFlowAPI) GetApplicationEndpointPolicies() *config.PolicyResponse {
+	u.mu.RLock()
+	applicationId := u.ApplicationId
+	u.mu.RUnlock()
+
+	if applicationId == "" {
+		return nil
+	}
+
+	policies, err := api.GetApplicationEndpointPolicies(u.APIKey, applicationId)
+	if err != nil {
+		return nil
+	}
+
+	return policies
 }

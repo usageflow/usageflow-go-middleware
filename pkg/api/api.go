@@ -46,6 +46,36 @@ func FetchApiConfig(apiKey string) (*config.ApiConfigStrategy, error) {
 	return &verifyResp, nil
 }
 
+// GetApplicationEndpointPolicies retrieves the endpoint policies for a specific application
+func GetApplicationEndpointPolicies(apiKey, applicationId string) (*config.PolicyResponse, error) {
+	req, err := http.NewRequest("GET", BaseURL+"/policies?applicationId="+applicationId, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Set("x-usage-key", apiKey)
+	req.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := ioutil.ReadAll(resp.Body)
+		return nil, errors.New("failed to fetch policies: " + string(body))
+	}
+
+	var policyResp config.PolicyResponse
+	if err := json.NewDecoder(resp.Body).Decode(&policyResp); err != nil {
+		return nil, err
+	}
+
+	return &policyResp, nil
+}
+
 // ExecuteRequest sends a request to the UsageFlow API
 func ExecuteRequest(apiKey, ledgerId, method, url string, metadata map[string]interface{}) error {
 	requestBody := map[string]interface{}{
