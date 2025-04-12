@@ -3,21 +3,9 @@
 [![Go Reference](https://pkg.go.dev/badge/github.com/usageflow/usageflow-go-middleware.svg)](https://pkg.go.dev/github.com/usageflow/usageflow-go-middleware)
 [![Go Report Card](https://goreportcard.com/badge/github.com/usageflow/usageflow-go-middleware.svg)](https://goreportcard.com/report/github.com/usageflow/usageflow-go-middleware)
 
-A powerful Go middleware package for integrating UsageFlow API with your Gin web applications. This middleware helps you track and manage API usage, implement rate limiting, and handle authentication seamlessly.
+> ⚠️ **Beta Notice**: This package is currently in beta for experimentation. While we strive to maintain stability, breaking changes may occur as we refine the API and features. We recommend testing thoroughly in development environments before deploying to production.
 
-## Features
-
-- Easy integration with Gin web framework
-- Automatic API usage tracking
-- Request interception and validation
-- JWT token handling
-- Configurable route whitelisting
-- Thread-safe configuration management
-- Automatic config updates
-- Endpoint-specific policy management
-- Rate limiting per endpoint
-- Identity field extraction from various sources
-- Request body preservation
+A Go middleware package for integrating UsageFlow API with your Gin web applications. This middleware helps you track and manage API usage, implement rate limiting, and handle authentication seamlessly.
 
 ## Installation
 
@@ -32,7 +20,8 @@ package main
 
 import (
     "github.com/gin-gonic/gin"
-    usageflow "github.com/usageflow/usageflow-go-middleware"
+    ufconfig "github.com/usageflow/usageflow-go-middleware/pkg/config"
+    ufmiddleware "github.com/usageflow/usageflow-go-middleware/pkg/middleware"
 )
 
 func main() {
@@ -40,16 +29,16 @@ func main() {
     r := gin.Default()
 
     // Initialize UsageFlow with your API key
-    uf := usageflow.New("your-api-key")
+    uf := ufmiddleware.New("your-api-key")
 
-    // Define routes to monitor (using wildcards to monitor all routes)
-    routes := []usageflow.Route{
-        {Method: "*", URL: "*"},
+    // Define routes to monitor
+    routes := []ufconfig.Route{
+        {Method: "*", URL: "*"}, // Monitor all routes
     }
 
     // Define whitelist routes (optional)
-    whiteList := []usageflow.Route{
-        {Method: "*", URL: "*"},
+    whiteList := []ufconfig.Route{
+        // {Method: "*", URL: "*"}, // Uncomment to whitelist all routes
     }
 
     // Use the middleware
@@ -66,39 +55,116 @@ func main() {
 
 ## Configuration
 
-### Routes to Monitor
+The middleware requires only three configuration points:
 
-Define which routes should be monitored by the middleware. You can use wildcards to monitor all routes:
+1. **API Key**: Your UsageFlow API key
+2. **Routes to Monitor**: Which routes should be tracked
+3. **Whitelist Routes**: Which routes should be ignored
+
+### 1. API Key
+
+Initialize the middleware with your API key:
+
+```go
+uf := ufmiddleware.New("your-api-key")
+```
+
+### 2. Routes to Monitor
+
+Define which routes should be monitored. You can use wildcards to monitor all routes:
 
 ```go
 // Monitor all routes
-routes := []usageflow.Route{
+routes := []ufconfig.Route{
     {Method: "*", URL: "*"},
 }
 
 // Or monitor specific routes
-routes := []usageflow.Route{
+routes := []ufconfig.Route{
     {Method: "GET", URL: "/api/v1/users"},
     {Method: "POST", URL: "/api/v1/data"},
 }
 ```
 
-### Whitelist Routes
+### 3. Whitelist Routes
 
 Define routes that should bypass the middleware. You can use wildcards to whitelist all routes:
 
 ```go
 // Whitelist all routes
-whiteList := []usageflow.Route{
+whiteList := []ufconfig.Route{
     {Method: "*", URL: "*"},
 }
 
 // Or whitelist specific routes
-whiteList := []usageflow.Route{
+whiteList := []ufconfig.Route{
     {Method: "GET", URL: "/health"},
     {Method: "GET", URL: "/metrics"},
 }
 ```
+
+## Example
+
+Here's a complete example showing how to use the middleware in a real application:
+
+```go
+package main
+
+import (
+    "net/http"
+    "strconv"
+
+    "github.com/gin-gonic/gin"
+    ufconfig "github.com/usageflow/usageflow-go-middleware/pkg/config"
+    ufmiddleware "github.com/usageflow/usageflow-go-middleware/pkg/middleware"
+)
+
+type User struct {
+    ID   int    `json:"id"`
+    Name string `json:"name"`
+}
+
+func main() {
+    r := gin.Default()
+
+    // Initialize UsageFlow
+    uf := ufmiddleware.New("your-api-key")
+
+    // Configure routes
+    routes := []ufconfig.Route{
+        {Method: "*", URL: "*"}, // Monitor all routes
+    }
+
+    whiteList := []ufconfig.Route{
+        // {Method: "*", URL: "*"}, // Uncomment to whitelist all routes
+    }
+
+    // Use the middleware
+    r.Use(uf.RequestInterceptor(routes, whiteList))
+
+    // Your application routes
+    r.GET("/users", func(c *gin.Context) {
+        c.JSON(http.StatusOK, gin.H{"users": []User{}})
+    })
+
+    r.Run(":8080")
+}
+```
+
+## Release Process
+
+This package uses GitHub Actions to automatically create new releases when changes are pushed to the main branch. The process works as follows:
+
+1. When changes are pushed to the main branch, a GitHub Action automatically:
+   - Creates a new git tag based on the version in `go.mod`
+   - Creates a new GitHub release
+   - Updates the package documentation
+
+To trigger a new release:
+
+1. Update the version in `go.mod`
+2. Push your changes to the main branch
+3. The GitHub Action will automatically create a new release
 
 ## Documentation
 
