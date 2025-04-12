@@ -61,11 +61,16 @@ jobs:
           sed -i.bak "s|^module .*|module github.com/usageflow/usageflow-go-middleware/v${NEW_VERSION}|" go.mod
           rm -f go.mod.bak
 
-      - name: Create tag
+      - name: Configure Git
         if: steps.check_commit.outputs.skip_version_bump == 'false'
         run: |
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
+          git remote set-url origin https://x-access-token:${{ secrets.PAT_TOKEN }}@github.com/${{ github.repository }}.git
+
+      - name: Create tag
+        if: steps.check_commit.outputs.skip_version_bump == 'false'
+        run: |
           git add go.mod
           git commit -m "Bump version to v${{ steps.bump.outputs.new_version }}"
           git tag -a "v${{ steps.bump.outputs.new_version }}" -m "Release v${{ steps.bump.outputs.new_version }}"
