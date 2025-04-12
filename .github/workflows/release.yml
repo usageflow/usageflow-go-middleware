@@ -1,4 +1,4 @@
-name: Tag Non-Chore Commits
+name: Version Bump and Tag
 
 on:
   push:
@@ -9,7 +9,7 @@ permissions:
   contents: write
 
 jobs:
-  tag:
+  versioning:
     runs-on: ubuntu-latest
 
     steps:
@@ -19,28 +19,56 @@ jobs:
           fetch-depth: 0
           token: ${{ secrets.PAT_TOKEN }}
 
-      - name: Check commit message
-        id: check_commit
+      - name: Read commit message
+        id: commit
         run: |
           COMMIT_MSG=$(git log -1 --pretty=%B)
-          echo "Commit message: $COMMIT_MSG"
+          echo "commit_msg=$COMMIT_MSG" >> $GITHUB_OUTPUT
+
+      - name: Determine bump type
+        id: bump
+        run: |
+          COMMIT_MSG="${{ steps.commit.outputs.commit_msg }}"
           if [[ "$COMMIT_MSG" == chore:* ]]; then
-            echo "skip_tag=true" >> $GITHUB_OUTPUT
+            echo "type=skip" >> $GITHUB_OUTPUT
+          elif [[ "$COMMIT_MSG" == major:* ]]; then
+            echo "type=major" >> $GITHUB_OUTPUT
+          elif [[ "$COMMIT_MSG" == minor:* ]]; then
+            echo "type=minor" >> $GITHUB_OUTPUT
           else
-            echo "skip_tag=false" >> $GITHUB_OUTPUT
+            echo "type=patch" >> $GITHUB_OUTPUT
           fi
 
-      - name: Get current date tag
-        if: steps.check_commit.outputs.skip_tag == 'false'
-        id: tag
+      - name: Bump version
+        if: steps.bump.outputs.type != 'skip'
+        id: version
         run: |
-          TAG_NAME="v$(date +'%Y%m%d%H%M%S')"
-          echo "tag_name=$TAG_NAME" >> $GITHUB_OUTPUT
+          CURRENT_VERSION=$(cat VERSION)
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT_VERSION"
+          case "${{ steps.bump.outputs.type }}" in
+            major)
+              MAJOR=$((MAJOR + 1))
+              MINOR=0
+              PATCH=0
+              ;;
+            minor)
+              MINOR=$((MINOR + 1))
+              PATCH=0
+              ;;
+            patch)
+              PATCH=$((PATCH + 1))
+              ;;
+          esac
+          NEW_VERSION="${MAJOR}.${MINOR}.${PATCH}"
+          echo "$NEW_VERSION" > VERSION
+          echo "new_version=$NEW_VERSION" >> $GITHUB_OUTPUT
 
-      - name: Create tag
-        if: steps.check_commit.outputs.skip_tag == 'false'
+      - name: Commit and tag version
+        if: steps.bump.outputs.type != 'skip'
         run: |
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
-          git tag -a "${{ steps.tag.outputs.tag_name }}" -m "Auto tag for non-chore commit"
-          git push origin "${{ steps.tag.outputs.tag_name }}"
+          git add VERSION
+          git commit -m "Bump version to v${{ steps.version.outputs.new_version }}"
+          git tag -a "v${{ steps.version.outputs.new_version }}" -m "Release v${{ steps.version.outputs.new_version }}"
+          git push origin main --tags
