@@ -1,4 +1,4 @@
-name: Release
+name: Tag Non-Chore Commits
 
 on:
   push:
@@ -7,11 +7,11 @@ on:
 
 permissions:
   contents: write
-  pull-requests: write
 
 jobs:
-  release:
+  tag:
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -23,69 +23,24 @@ jobs:
         id: check_commit
         run: |
           COMMIT_MSG=$(git log -1 --pretty=%B)
-          if [[ $COMMIT_MSG == chore:* ]]; then
-            echo "skip_version_bump=true" >> $GITHUB_OUTPUT
+          echo "Commit message: $COMMIT_MSG"
+          if [[ "$COMMIT_MSG" == chore:* ]]; then
+            echo "skip_tag=true" >> $GITHUB_OUTPUT
           else
-            echo "skip_version_bump=false" >> $GITHUB_OUTPUT
+            echo "skip_tag=false" >> $GITHUB_OUTPUT
           fi
 
-      - name: Set up Go
-        if: steps.check_commit.outputs.skip_version_bump == 'false'
-        uses: actions/setup-go@v5
-        with:
-          go-version: '1.21'
-
-      - name: Get current version
-        if: steps.check_commit.outputs.skip_version_bump == 'false'
-        id: version
+      - name: Get current date tag
+        if: steps.check_commit.outputs.skip_tag == 'false'
+        id: tag
         run: |
-          VERSION=$(grep '^module' go.mod | awk '{print $2}' | sed 's/.*v//')
-          echo "current_version=$VERSION" >> $GITHUB_OUTPUT
+          TAG_NAME="v$(date +'%Y%m%d%H%M%S')"
+          echo "tag_name=$TAG_NAME" >> $GITHUB_OUTPUT
 
-      - name: Bump patch version
-        if: steps.check_commit.outputs.skip_version_bump == 'false'
-        id: bump
-        run: |
-          CURRENT_VERSION=${{ steps.version.outputs.current_version }}
-          MAJOR=$(echo $CURRENT_VERSION | cut -d. -f1)
-          MINOR=$(echo $CURRENT_VERSION | cut -d. -f2)
-          PATCH=$(echo $CURRENT_VERSION | cut -d. -f3)
-          NEW_PATCH=$((PATCH + 1))
-          NEW_VERSION="$MAJOR.$MINOR.$NEW_PATCH"
-          echo "new_version=$NEW_VERSION" >> $GITHUB_OUTPUT
-
-      - name: Update go.mod version
-        if: steps.check_commit.outputs.skip_version_bump == 'false'
-        run: |
-          NEW_VERSION=${{ steps.bump.outputs.new_version }}
-          sed -i.bak "s|^module .*|module github.com/usageflow/usageflow-go-middleware/v${NEW_VERSION}|" go.mod
-          rm -f go.mod.bak
-
-      - name: Configure Git
-        if: steps.check_commit.outputs.skip_version_bump == 'false'
+      - name: Create tag
+        if: steps.check_commit.outputs.skip_tag == 'false'
         run: |
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
-          git remote set-url origin https://x-access-token:${{ secrets.PAT_TOKEN }}@github.com/${{ github.repository }}.git
-
-      - name: Create tag
-        if: steps.check_commit.outputs.skip_version_bump == 'false'
-        run: |
-          git add go.mod
-          git commit -m "Bump version to v${{ steps.bump.outputs.new_version }}"
-          git tag -a "v${{ steps.bump.outputs.new_version }}" -m "Release v${{ steps.bump.outputs.new_version }}"
-          git push origin "v${{ steps.bump.outputs.new_version }}"
-
-      - name: Create Release
-        if: steps.check_commit.outputs.skip_version_bump == 'false'
-        uses: softprops/action-gh-release@v1
-        with:
-          tag_name: v${{ steps.bump.outputs.new_version }}
-          name: Release v${{ steps.bump.outputs.new_version }}
-          body: |
-            ## Changes
-            - Automated patch version bump
-          draft: false
-          prerelease: false
-        env:
-          GITHUB_TOKEN: ${{ secrets.PAT_TOKEN }}
+          git tag -a "${{ steps.tag.outputs.tag_name }}" -m "Auto tag for non-chore commit"
+          git push origin "${{ steps.tag.outputs.tag_name }}"
