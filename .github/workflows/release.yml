@@ -52,7 +52,9 @@ jobs:
       - name: Update go.mod version
         if: steps.check_commit.outputs.skip_version_bump == 'false'
         run: |
-          sed -i "s/^module .*/module github.com\/usageflow\/usageflow-go-middleware\/v${{ steps.bump.outputs.new_version }}/" go.mod
+          NEW_VERSION=${{ steps.bump.outputs.new_version }}
+          sed -i.bak "s|^module .*|module github.com/usageflow/usageflow-go-middleware/v${NEW_VERSION}|" go.mod
+          rm -f go.mod.bak
 
       - name: Create tag
         if: steps.check_commit.outputs.skip_version_bump == 'false'
