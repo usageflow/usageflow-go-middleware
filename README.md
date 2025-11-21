@@ -170,6 +170,29 @@ To trigger a new release:
 
 For detailed documentation and examples, please visit our [documentation site](https://docs.usageflow.io).
 
+## Security
+
+### Known Vulnerabilities
+
+This package currently uses `golang.org/x/net v0.25.0` which has a known vulnerability:
+- **GO-2025-3595**: Incorrect Neutralization of Input During Web Page Generation in x/net
+  - **Severity**: Critical
+  - **Fixed in**: `golang.org/x/net v0.38.0` (requires Go 1.24.0+)
+
+### Recommendations
+
+1. **For Production**: Upgrade to Go 1.24.0 or later to get the security fix automatically
+2. **For Development**: The current version (Go 1.23.1) is safe for development, but upgrade before deploying to production
+3. **Delve Debugger**: If you're using Delve for debugging, upgrade to Delve v1.24.x when using Go 1.24:
+   ```bash
+   go install github.com/go-delve/delve/cmd/dlv@v1.24.1
+   ```
+
+### Go Version Requirements
+
+- **Minimum**: Go 1.23.1 (current requirement)
+- **Recommended**: Go 1.24.0+ (includes security fixes)
+
 ## Release Notes
 
 For detailed release notes and migration guides, please see [RELEASE_NOTES.md](RELEASE_NOTES.md).

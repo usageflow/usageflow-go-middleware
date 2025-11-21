@@ -13,40 +13,33 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/usageflow/usageflow-go-middleware/pkg/api"
 	"github.com/usageflow/usageflow-go-middleware/pkg/config"
+	"github.com/usageflow/usageflow-go-middleware/pkg/socket"
 )
 
-// PolicyMap represents a map of endpoint patterns to their corresponding policies
 type PolicyMap map[string]*config.ApplicationEndpointPolicy
 
-// UsageFlowAPI represents the main middleware structure
 type UsageFlowAPI struct {
-	APIKey                      string                    `json:"apiKey"`
-	ApplicationId               string                    `json:"applicationId"`
-	ApiConfig                   *config.ApiConfigStrategy `json:"apiConfig"`
-	ApplicationEndpointPolicies *config.PolicyResponse    `json:"applicationEndpointPolicies"`
+	APIKey                      string                     `json:"apiKey"`
+	ApplicationId               string                     `json:"applicationId"`
+	ApiConfig                   []config.ApiConfigStrategy `json:"apiConfig"`
+	ApplicationEndpointPolicies *config.PolicyResponse     `json:"applicationEndpointPolicies"`
 	policyMap                   PolicyMap
 	mu                          sync.RWMutex
+	socketManager               *socket.UsageFlowSocketManager
+	connected                   bool // Tracks socket connection status
 }
-
-const (
-	baseURL = "https://api.usageflow.io/api/v1"
-)
 
 // New creates a new instance of UsageFlowAPI
 func New(apiKey string) *UsageFlowAPI {
+	socketManager := socket.NewUsageFlowSocketManager(apiKey)
 	api := &UsageFlowAPI{
-		policyMap: make(PolicyMap),
+		policyMap:     make(PolicyMap),
+		socketManager: socketManager,
+		connected:     socketManager.IsConnected(), // Initialize connection status
 	}
-	api.Init(apiKey)
+	api.StartConfigUpdater()
 	return api
-}
-
-// Init initializes the UsageFlowAPI with the provided API key
-func (u *UsageFlowAPI) Init(apiKey string) {
-	u.APIKey = apiKey
-	u.StartConfigUpdater()
 }
 
 // RequestInterceptor creates a Gin middleware for intercepting requests
@@ -73,12 +66,6 @@ func (u *UsageFlowAPI) RequestInterceptor(routes, whiteListRoutes []config.Route
 
 	populateMap(routesMap, routes)
 	populateMap(whiteListRoutesMap, whiteListRoutes)
-
-	// Initial config fetch
-	newConfig, _ := api.FetchApiConfig(u.APIKey)
-	u.mu.Lock()
-	u.ApiConfig = newConfig
-	u.mu.Unlock()
 
 	return func(c *gin.Context) {
 		method := c.Request.Method
@@ -114,14 +101,28 @@ func (u *UsageFlowAPI) RequestInterceptor(routes, whiteListRoutes []config.Route
 			ledgerId = fmt.Sprintf("%s %s", ledgerId, userIdentifierSuffix)
 		}
 
-		// Execute initial allocation request
 		success, err := u.ExecuteRequestWithMetadata(ledgerId, method, url, metadata, c)
 		if err != nil {
+			// If socket is not connected, continue normally instead of aborting
+			u.mu.RLock()
+			connected := u.connected
+			u.mu.RUnlock()
+			if !connected {
+				c.Next()
+				return
+			}
 			c.AbortWithStatusJSON(500, gin.H{"error": "Failed to process request"})
 			return
 		}
-
 		if !success {
+			// If socket is not connected, continue normally instead of aborting
+			u.mu.RLock()
+			connected := u.connected
+			u.mu.RUnlock()
+			if !connected {
+				c.Next()
+				return
+			}
 			c.AbortWithStatusJSON(400, gin.H{"error": "Request allocation failed"})
 			return
 		}
@@ -141,105 +142,213 @@ func (u *UsageFlowAPI) RequestInterceptor(routes, whiteListRoutes []config.Route
 	}
 }
 
-// ExecuteRequestWithMetadata executes the initial allocation request
-func (u *UsageFlowAPI) ExecuteRequestWithMetadata(ledgerId, method, url string, metadata map[string]interface{}, c *gin.Context) (bool, error) {
-	apiURL := baseURL + "/ledgers/measure/allocate"
+func (u *UsageFlowAPI) FetchApiConfig() ([]config.ApiConfigStrategy, error) {
+	response, err := u.socketManager.SendAsync(&socket.UsageFlowSocketMessage{
+		Type: "get_application_policies",
+	})
 
-	payload := map[string]interface{}{
-		"alias":  ledgerId,
-		"amount": 1,
-	}
-
-	payloadBytes, err := json.Marshal(payload)
 	if err != nil {
-		return false, fmt.Errorf("failed to marshal request payload: %v", err)
+		return nil, err
 	}
 
-	req, err := http.NewRequest("POST", apiURL, bytes.NewBuffer(payloadBytes))
-	if err != nil {
-		return false, err
+	// The response payload is a map[string]interface{} with "policies" and "total" keys
+	payloadMap, ok := response.Payload.(map[string]interface{})
+	if !ok {
+		return nil, fmt.Errorf("unexpected response payload type: %T", response.Payload)
 	}
 
-	req.Header.Set("x-usage-key", u.APIKey)
-	req.Header.Set("Content-Type", "application/json")
+	// Convert the map to PolicyListResponse
+	var policyList config.PolicyListResponse
 
-	client := &http.Client{}
-	resp, err := client.Do(req)
-	if err != nil {
-		return false, err
-	}
-	defer resp.Body.Close()
-
-	bodyBytes, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return false, err
-	}
-
-	var responseData map[string]interface{}
-	if err := json.Unmarshal(bodyBytes, &responseData); err == nil {
-		if eventId, exists := responseData["eventId"]; exists {
-			c.Set("eventId", eventId)
+	// Handle policies array
+	if policiesVal, ok := payloadMap["policies"]; ok {
+		policiesBytes, err := json.Marshal(policiesVal)
+		if err != nil {
+			return nil, fmt.Errorf("failed to marshal policies: %v", err)
+		}
+		if err := json.Unmarshal(policiesBytes, &policyList.Policies); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal policies: %v", err)
 		}
 	}
 
-	return resp.StatusCode >= 200 && resp.StatusCode < 300, nil
+	// Handle total
+	if totalVal, ok := payloadMap["total"]; ok {
+		if totalFloat, ok := totalVal.(float64); ok {
+			policyList.Total = int(totalFloat)
+		}
+	}
+
+	// Update ApiConfig with lock
+	u.mu.Lock()
+	u.ApiConfig = policyList.Policies
+	u.mu.Unlock()
+
+	return policyList.Policies, nil
+}
+
+func (u *UsageFlowAPI) allocateRequest(ledgerId string, amount *float64, metadata map[string]interface{}) (string, error) {
+	// Check if socket is connected (this updates the status)
+	connected := u.isConnected()
+
+	// If not connected, skip and return empty allocation ID (continue normally)
+	if !connected {
+		return "", nil
+	}
+
+	var amt float64 = 1
+
+	if amount != nil {
+		amt = *amount
+	}
+
+	payload := &socket.RequestForAllocation{
+		Alias:    ledgerId,
+		Amount:   amt,
+		Metadata: metadata,
+	}
+	response, err := u.socketManager.SendAsync(&socket.UsageFlowSocketMessage{
+		Type:    "request_for_allocation",
+		Payload: payload,
+	})
+	if err != nil {
+		// Update connection status on error
+		u.mu.Lock()
+		u.connected = false
+		u.mu.Unlock()
+		// Return empty string to continue normally
+		return "", nil
+	}
+
+	if response.Error != "" {
+		return "", fmt.Errorf("failed to allocate request: %s", response.Error)
+	}
+
+	// The response payload is a map[string]interface{} with "allocationId" key
+	payloadMap, ok := response.Payload.(map[string]interface{})
+	if !ok {
+		return "", nil // Continue normally on unexpected response
+	}
+
+	allocationId, ok := payloadMap["allocationId"].(string)
+	if !ok {
+		return "", nil // Continue normally if allocationId not found
+	}
+
+	return allocationId, nil
+}
+
+func (u *UsageFlowAPI) useAllocationRequest(ledgerId string, amount *float64, allocationId string, metadata map[string]interface{}) (bool, error) {
+	// Check if socket is connected
+	connected := u.isConnected()
+
+	// If not connected, skip and return success (continue normally)
+	if !connected {
+		return true, nil
+	}
+
+	// If no allocationId was provided (because we skipped allocation), just return success
+	if allocationId == "" {
+		return true, nil
+	}
+
+	var amt float64 = 1
+
+	if amount != nil {
+		amt = *amount
+	}
+
+	payload := &socket.UseAllocationRequest{
+		Alias:        ledgerId,
+		Amount:       amt,
+		AllocationID: allocationId,
+		Metadata:     metadata,
+	}
+	response, err := u.socketManager.SendAsync(&socket.UsageFlowSocketMessage{
+		Type:    "use_allocation",
+		Payload: payload,
+	})
+	if err != nil {
+		// Update connection status on error
+		u.mu.Lock()
+		u.connected = false
+		u.mu.Unlock()
+		// Return success to continue normally
+		return true, nil
+	}
+
+	// The response payload is a map[string]interface{}
+	// We just need to verify the response was successful
+	_, ok := response.Payload.(map[string]interface{})
+	if !ok {
+		// Continue normally on unexpected response
+		return true, nil
+	}
+
+	return true, nil
+}
+
+// ExecuteRequestWithMetadata executes the initial allocation request
+func (u *UsageFlowAPI) ExecuteRequestWithMetadata(ledgerId, method, url string, metadata map[string]interface{}, c *gin.Context) (bool, error) {
+	amount := float64(1)
+	allocationId, err := u.allocateRequest(ledgerId, &amount, metadata)
+	if err != nil {
+		return false, err
+	}
+	c.Set("eventId", allocationId)
+
+	return true, nil
+}
+
+func (u *UsageFlowAPI) isConnected() bool {
+	// Always check the actual connection status from socket manager
+	if u.socketManager != nil {
+		connected := u.socketManager.IsConnected()
+		u.mu.Lock()
+		u.connected = connected
+		u.mu.Unlock()
+		return connected
+	}
+
+	u.mu.RLock()
+	connected := u.connected
+	u.mu.RUnlock()
+	return connected
 }
 
 // ExecuteFulfillRequestWithMetadata executes the fulfill request after the main request is processed
 func (u *UsageFlowAPI) ExecuteFulfillRequestWithMetadata(ledgerId, method, url string, metadata map[string]interface{}, c *gin.Context) (bool, error) {
-	apiURL := baseURL + "/ledgers/measure/allocate/use"
+	// Check if socket is connected
+	connected := u.isConnected()
+
+	// If not connected, skip and return success (continue normally)
+	if !connected {
+		return true, nil
+	}
 
 	allocationId, exists := c.Get("eventId")
 	if !exists {
-		return false, fmt.Errorf("no allocation ID found")
+		// No allocation ID means we skipped allocation (socket was not connected)
+		// Return success to continue normally
+		return true, nil
 	}
 
 	startTime, exists := c.Get("usageflowStartTime")
-	if exists {
-		requestDuration := time.Since(startTime.(time.Time))
-		metadata["requestDuration"] = requestDuration.Milliseconds() // Store as milliseconds
+	if !exists {
+		// No start time, but continue normally
+		return true, nil
 	}
+	requestDuration := time.Since(startTime.(time.Time))
 
-	payload := map[string]interface{}{
-		"alias":        ledgerId,
-		"amount":       1,
-		"allocationId": allocationId.(string),
-		"metadata":     metadata,
-	}
+	metadata["requestDuration"] = requestDuration.Milliseconds()
 
-	payloadBytes, err := json.Marshal(payload)
+	amount := float64(1)
+
+	success, err := u.useAllocationRequest(ledgerId, &amount, allocationId.(string), metadata)
 	if err != nil {
-		return false, fmt.Errorf("failed to marshal fulfill payload: %v", err)
+		// On error, return success to continue normally
+		return true, nil
 	}
-
-	req, err := http.NewRequest("POST", apiURL, bytes.NewBuffer(payloadBytes))
-	if err != nil {
-		return false, err
-	}
-
-	req.Header.Set("x-usage-key", u.APIKey)
-	req.Header.Set("Content-Type", "application/json")
-
-	client := &http.Client{}
-	resp, err := client.Do(req)
-	if err != nil {
-		return false, err
-	}
-	defer resp.Body.Close()
-
-	bodyBytes, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return false, err
-	}
-
-	var responseData map[string]interface{}
-	if err := json.Unmarshal(bodyBytes, &responseData); err == nil {
-		if eventId, exists := responseData["eventId"]; exists {
-			c.Set("eventId", eventId)
-		}
-	}
-
-	return resp.StatusCode >= 200 && resp.StatusCode < 300, nil
+	return success, nil
 }
 
 // collectRequestMetadata gathers metadata from the request
@@ -378,112 +487,68 @@ func isRouteMonitored(method, url string, routesMap map[string]map[string]bool) 
 	return false
 }
 
-func (u *UsageFlowAPI) processRequest(c *gin.Context, method, url string) error {
-	// Implementation of request processing logic
-	// This would include your existing logic for handling requests
-	return nil
-}
-
 // GetUserPrefix attempts to extract a user identifier prefix based on the API configuration
 func (u *UsageFlowAPI) GetUserPrefix(c *gin.Context, method, url string) string {
 	u.mu.RLock()
 	config := u.ApiConfig
-	policyMap := u.policyMap
 	u.mu.RUnlock()
 
 	if config == nil {
 		return ""
 	}
 
-	// First try to find a matching policy using the map
-	policyKey := fmt.Sprintf("%s:%s", method, url)
-	policy, ok := policyMap[policyKey]
-	if ok {
-		policyMethod := strings.Split(policyKey, ":")[0]
-		policyPattern := strings.Split(policyKey, ":")[1]
-
-		if policyMethod == method && policyPattern == url {
-			// Found matching policy, use its identity configuration
-			var identifier string
-			switch policy.IdentityLocation {
-			case "header":
-				identifier = c.GetHeader(policy.IdentityField)
-			case "query":
-				identifier = c.Query(policy.IdentityField)
-			case "path_params":
-				identifier = c.Param(policy.IdentityField)
-			case "query_params":
-				identifier = c.Query(policy.IdentityField)
-			case "body":
-				bodyBytes, err := io.ReadAll(c.Request.Body)
-				if err == nil {
-					// Restore the body for further processing
-					c.Request.Body = ioutil.NopCloser(bytes.NewBuffer(bodyBytes))
-
-					// Try to parse as JSON for policy matching
-					var bodyMap map[string]interface{}
-					if err := json.Unmarshal(bodyBytes, &bodyMap); err == nil {
-						// Use bodyMap for your logic
-						if policy.IdentityLocation == "body" {
-							if val, ok := bodyMap[policy.IdentityField]; ok {
-								if strVal, ok := val.(string); ok {
-									identifier = strVal
-								}
-							}
-						}
-					}
-				}
-			case "bearer_token":
-				if token, err := ExtractBearerToken(c); err == nil {
-					if claims, err := DecodeJWTUnverified(token); err == nil {
-						if val, ok := claims[policy.IdentityField]; ok {
-							if strVal, ok := val.(string); ok {
-								identifier = strVal
-							}
-						}
-					}
-				}
-			}
-
-			if identifier != "" {
-				return TransformToLedgerId(identifier)
-			}
-		}
-	}
-
-	// If no matching policy found or no identifier from policy, fall back to base config
 	var identifier string
-	switch config.IdentityFieldLocation {
-	case "header":
-		identifier = c.GetHeader(config.IdentityFieldName)
-	case "query":
-		identifier = c.Query(config.IdentityFieldName)
-	case "path_params":
-		identifier = c.Param(config.IdentityFieldName)
-	case "query_params":
-		identifier = c.Query(config.IdentityFieldName)
-	case "body":
-		var bodyMap map[string]interface{}
-		if err := c.ShouldBindJSON(&bodyMap); err == nil {
-			if val, ok := bodyMap[config.IdentityFieldName]; ok {
-				if strVal, ok := val.(string); ok {
-					identifier = strVal
-				}
-			}
+
+	// Find matching config for current method and url
+	for _, cfg := range config {
+		// Check if this config matches the current method and url
+		if cfg.Method != method || cfg.Url != url {
+			continue
 		}
-		// Restore the body for further processing
-		if body, err := GetRequestBody(c); err == nil {
-			c.Request.Body = ioutil.NopCloser(bytes.NewBufferString(body))
+
+		// Skip if identity fields are not configured
+		if cfg.IdentityFieldLocation == nil || cfg.IdentityFieldName == nil {
+			continue
 		}
-	case "bearer_token":
-		if token, err := ExtractBearerToken(c); err == nil {
-			if claims, err := DecodeJWTUnverified(token); err == nil {
-				if val, ok := claims[config.IdentityFieldName]; ok {
+
+		// If no matching policy found or no identifier from policy, fall back to base config
+		switch *cfg.IdentityFieldLocation {
+		case "headers":
+			identifier = c.GetHeader(*cfg.IdentityFieldName)
+		case "query":
+			identifier = c.Query(*cfg.IdentityFieldName)
+		case "path_params":
+			identifier = c.Param(*cfg.IdentityFieldName)
+		case "query_params":
+			identifier = c.Query(*cfg.IdentityFieldName)
+		case "body":
+			var bodyMap map[string]interface{}
+			if err := c.ShouldBindJSON(&bodyMap); err == nil {
+				if val, ok := bodyMap[*cfg.IdentityFieldName]; ok {
 					if strVal, ok := val.(string); ok {
 						identifier = strVal
 					}
 				}
 			}
+			// Restore the body for further processing
+			if body, err := GetRequestBody(c); err == nil {
+				c.Request.Body = ioutil.NopCloser(bytes.NewBufferString(body))
+			}
+		case "bearer_token":
+			if token, err := ExtractBearerToken(c); err == nil {
+				if claims, err := DecodeJWTUnverified(token); err == nil {
+					if val, ok := claims[*cfg.IdentityFieldName]; ok {
+						if strVal, ok := val.(string); ok {
+							identifier = strVal
+						}
+					}
+				}
+			}
+		}
+
+		// If we found an identifier, break out of the loop
+		if identifier != "" {
+			break
 		}
 	}
 
@@ -492,22 +557,4 @@ func (u *UsageFlowAPI) GetUserPrefix(c *gin.Context, method, url string) string 
 	}
 
 	return ""
-}
-
-// GetApplicationEndpointPolicies fetches the endpoint policies for the current application
-func (u *UsageFlowAPI) GetApplicationEndpointPolicies() *config.PolicyResponse {
-	u.mu.RLock()
-	applicationId := u.ApplicationId
-	u.mu.RUnlock()
-
-	if applicationId == "" {
-		return nil
-	}
-
-	policies, err := api.GetApplicationEndpointPolicies(u.APIKey, applicationId)
-	if err != nil {
-		return nil
-	}
-
-	return policies
 }

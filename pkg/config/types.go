@@ -1,17 +1,17 @@
 package config
 
+type PolicyListResponse struct {
+	Policies []ApiConfigStrategy `json:"policies"`
+	Total    int                 `json:"total"`
+}
+
 // ApiConfigStrategy represents the configuration strategy for the API
+// Matches UsageFlowConfig interface: url, method, identityFieldName?, identityFieldLocation?
 type ApiConfigStrategy struct {
-	ID                    string                 `bson:"_id" json:"_id"`
-	Name                  string                 `bson:"name" json:"name"`
-	AccountId             string                 `bson:"accountId" json:"accountId"`
-	ApplicationId         string                 `bson:"applicationId" json:"applicationId"`
-	IdentityFieldName     string                 `bson:"identityFieldName" json:"identityFieldName"`
-	IdentityFieldLocation string                 `bson:"identityFieldLocation" json:"identityFieldLocation"`
-	ConfigData            map[string]interface{} `bson:"configData" json:"configData"`
-	CreatedAt             int64                  `bson:"createdAt" json:"createdAt"`
-	UpdatedAt             int64                  `bson:"updatedAt" json:"updatedAt"`
-	DeletedAt             *int64                 `bson:"deletedAt" json:"deletedAt"`
+	Url                   string  `bson:"url" json:"url"`
+	Method                string  `bson:"method" json:"method"`
+	IdentityFieldName     *string `bson:"identityFieldName,omitempty" json:"identityFieldName,omitempty"`
+	IdentityFieldLocation *string `bson:"identityFieldLocation,omitempty" json:"identityFieldLocation,omitempty"`
 }
 
 type ApplicationEndpointPolicy struct {
@@ -33,10 +33,7 @@ type ApplicationEndpointPolicy struct {
 }
 
 type PolicyResponse struct {
-	Data struct {
-		Total int                         `json:"total"`
-		Items []ApplicationEndpointPolicy `json:"items"`
-	} `json:"data"`
+	Data PolicyListResponse `json:"data"`
 }
 
 // Route defines an individual route configuration

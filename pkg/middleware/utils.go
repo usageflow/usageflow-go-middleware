@@ -10,50 +10,25 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/usageflow/usageflow-go-middleware/pkg/api"
-	types "github.com/usageflow/usageflow-go-middleware/pkg/config"
 )
 
 var (
 	once sync.Once
 )
 
-// updateConfig fetches and updates the configuration and policies
-func (u *UsageFlowAPI) updateConfig() {
-	config, err := api.FetchApiConfig(u.APIKey)
-	if err != nil {
-		return
-	}
-
-	policies, err := api.GetApplicationEndpointPolicies(u.APIKey, config.ApplicationId)
-	if err != nil {
-		return
-	}
-
-	u.mu.Lock()
-	u.ApiConfig = config
-	u.ApplicationId = config.ApplicationId
-	u.ApplicationEndpointPolicies = policies
-	u.policyMap = make(map[string]*types.ApplicationEndpointPolicy)
-	for _, policy := range policies.Data.Items {
-		u.policyMap[fmt.Sprintf("%s:%s", policy.EndpointMethod, policy.EndpointPattern)] = &policy
-	}
-	u.mu.Unlock()
-}
-
 // StartConfigUpdater begins periodic updates of the API configuration
 func (u *UsageFlowAPI) StartConfigUpdater() {
 	once.Do(func() {
 		// Immediately fetch config
-		u.updateConfig()
+		u.FetchApiConfig()
 
-		// Start periodic updates
+		// Start periodic updates every 30 seconds
 		go func() {
-			ticker := time.NewTicker(10 * time.Second)
+			ticker := time.NewTicker(30 * time.Second)
 			defer ticker.Stop()
 
 			for range ticker.C {
-				u.updateConfig()
+				u.FetchApiConfig()
 			}
 		}()
 	})
