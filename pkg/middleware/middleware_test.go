@@ -8,7 +8,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
-	"github.com/usageflow/usageflow-go-middleware/pkg/config"
+	"github.com/usageflow/usageflow-go-middleware/v2/pkg/config"
 )
 
 func TestNew(t *testing.T) {

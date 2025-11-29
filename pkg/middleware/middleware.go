@@ -13,8 +13,8 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/usageflow/usageflow-go-middleware/pkg/config"
-	"github.com/usageflow/usageflow-go-middleware/pkg/socket"
+	"github.com/usageflow/usageflow-go-middleware/v2/pkg/config"
+	"github.com/usageflow/usageflow-go-middleware/v2/pkg/socket"
 )
 
 type PolicyMap map[string]*config.ApplicationEndpointPolicy

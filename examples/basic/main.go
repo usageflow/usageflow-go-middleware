@@ -4,8 +4,8 @@ import (
 	"log"
 
 	"github.com/gin-gonic/gin"
-	"github.com/usageflow/usageflow-go-middleware/pkg/config"
-	"github.com/usageflow/usageflow-go-middleware/pkg/middleware"
+	"github.com/usageflow/usageflow-go-middleware/v2/pkg/config"
+	"github.com/usageflow/usageflow-go-middleware/v2/pkg/middleware"
 )
 
 func main() {
