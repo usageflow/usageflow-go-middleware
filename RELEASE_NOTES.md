@@ -1,6 +1,143 @@
 # Release Notes
 
-## v2.0.0 (Latest)
+## v2.1.0 (Latest)
+
+### New Features
+
+#### Async Operation Support
+
+- **Fire-and-Forget for Non-Rate-Limited Requests**: Non-rate-limited requests now use asynchronous fire-and-forget pattern, generating allocation IDs locally and sending requests without waiting for server response. This significantly improves request latency for high-throughput scenarios.
+- **Rate-Limited Request Handling**: Rate-limited requests continue to use synchronous async pattern (waiting for server response) to ensure proper quota validation.
+- **Automatic Rate Limit Detection**: Added `HasRateLimit` field to `ApiConfigStrategy` to automatically detect and handle rate-limited endpoints differently from non-rate-limited ones.
+- **UUID-Based Allocation IDs**: Integrated `google/uuid` package for generating unique allocation IDs locally when using fire-and-forget pattern.
+
+#### Blocked Endpoints Management
+
+- **Automatic Blocked Endpoints Fetching**: New `FetchBlockedEndpoints()` method automatically fetches blocked endpoints from the server every 30 seconds.
+- **Endpoint Blocking Detection**: Middleware now checks if an endpoint is blocked before processing requests, returning appropriate HTTP status codes.
+- **Blocked Endpoints Storage**: Blocked endpoints are stored in a thread-safe map for fast lookup during request processing.
+- **Identity-Based Blocking**: Blocked endpoints can be identity-specific, allowing fine-grained control per user or entity.
+
+#### Enhanced Error Handling
+
+- **Specific HTTP Status Codes**: Improved error responses with appropriate HTTP status codes:
+  - `403 Forbidden`: Returned when an endpoint is blocked by policy rule
+  - `402 Payment Required`: Returned when user has insufficient resources
+  - `400 Bad Request`: Returned when request allocation fails
+- **Structured Error Messages**: Error responses now include structured JSON with `error` and `message` fields for better client-side handling.
+- **Endpoint Blocked Detection**: Automatic detection and handling of blocked endpoints with clear error messaging.
+
+#### Configuration Enhancements
+
+- **Rate Limit Configuration**: Added `HasRateLimit` boolean field to `ApiConfigStrategy` to indicate if an endpoint has rate limiting enabled.
+- **Blocked Endpoints Types**: New types added:
+  - `BlockedEndpointsResponse`: Response structure for blocked endpoints
+  - `BlockedEndpoints`: Individual blocked endpoint structure with URL, method, and identity
+
+#### Production Readiness
+
+- **Background Config Updates**: Config and blocked endpoints fetching now run in background goroutines to avoid blocking initialization.
+
+### API Changes
+
+#### Modified Methods
+
+1. **`GetUserPrefix()` Return Value**: Now returns both user identifier suffix and rate limit status:
+
+   ```go
+   // Old signature
+   func (u *UsageFlowAPI) GetUserPrefix(c *gin.Context, method, url string) string
+
+   // New signature
+   func (u *UsageFlowAPI) GetUserPrefix(c *gin.Context, method, url string) (string, bool)
+   ```
+
+2. **`ExecuteRequestWithMetadata()` Parameter**: Added `rateLimited` parameter:
+
+   ```go
+   // Old signature
+   func (u *UsageFlowAPI) ExecuteRequestWithMetadata(ledgerId, method, url string, metadata map[string]interface{}, c *gin.Context) (bool, error)
+
+   // New signature
+   func (u *UsageFlowAPI) ExecuteRequestWithMetadata(ledgerId, method, url string, metadata map[string]interface{}, c *gin.Context, rateLimited bool) (bool, error)
+   ```
+
+3. **`allocateRequest()` Parameter**: Added `rateLimited` parameter to control async behavior.
+
+4. **`useAllocationRequest()` Parameter**: Added `rateLimited` parameter to control async behavior.
+
+#### New Methods
+
+- **`FetchBlockedEndpoints()`**: Fetches blocked endpoints from the server and updates the internal blocked endpoints map.
+
+#### New Fields
+
+- **`BlockedEndpoints`**: New field in `UsageFlowAPI` struct to store blocked endpoints map.
+- **`HasRateLimit`**: New field in `ApiConfigStrategy` to indicate rate limiting status.
+- **`AllocationID`**: New optional field in `RequestForAllocation` for fire-and-forget requests.
+
+### Behavior Changes
+
+1. **Async Request Handling**: Non-rate-limited requests no longer wait for server response, improving latency.
+2. **Automatic Blocked Endpoints Updates**: Blocked endpoints are automatically fetched and updated every 30 seconds.
+3. **Endpoint Blocking**: Requests to blocked endpoints are automatically rejected with 403 status code.
+4. **Error Response Format**: Error responses now use structured JSON format with specific error codes.
+
+### Migration Guide
+
+For users upgrading from v2.0.0:
+
+1. **Update `GetUserPrefix()` calls**:
+
+   ```go
+   // Old way
+   suffix := uf.GetUserPrefix(c, method, url)
+
+   // New way
+   suffix, rateLimited := uf.GetUserPrefix(c, method, url)
+   ```
+
+2. **Update `ExecuteRequestWithMetadata()` calls**:
+
+   ```go
+   // Old way
+   success, err := uf.ExecuteRequestWithMetadata(ledgerId, method, url, metadata, c)
+
+   // New way
+   success, err := uf.ExecuteRequestWithMetadata(ledgerId, method, url, metadata, c, rateLimited)
+   ```
+
+3. **Handle rate limit status**: The rate limit status is now available in the context:
+
+   ```go
+   rateLimited, _ := c.Get("rateLimited")
+   isRateLimited, ok := rateLimited.(bool)
+   ```
+
+4. **No action needed for**:
+   - Basic middleware usage (automatic handling)
+   - Route configuration
+   - Whitelist configuration
+
+### Performance Improvements
+
+- **Reduced Latency**: Fire-and-forget pattern for non-rate-limited requests eliminates wait time for server response.
+- **Background Updates**: Config and blocked endpoints fetching run in background, not blocking request processing.
+- **Fast Blocked Endpoint Lookup**: Thread-safe map-based storage for O(1) blocked endpoint lookups.
+
+### Bug Fixes
+
+- Fixed WebSocket URL to use production endpoint instead of localhost
+- Improved error handling for blocked endpoints
+- Fixed rate limit detection logic
+
+### Dependencies
+
+- Added `github.com/google/uuid v1.6.0` for UUID generation
+
+---
+
+## v2.0.0
 
 ### Major Changes
 

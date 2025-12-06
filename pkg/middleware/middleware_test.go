@@ -129,7 +129,7 @@ func TestUsageFlowAPI_GetUserPrefix(t *testing.T) {
 			c.Request = httptest.NewRequest(tt.method, tt.url, nil)
 			tt.setup(c)
 
-			result := api.GetUserPrefix(c, tt.method, tt.url)
+			result, _ := api.GetUserPrefix(c, tt.method, tt.url)
 			assert.Equal(t, tt.expected, result)
 		})
 	}
@@ -280,7 +280,7 @@ func TestUsageFlowAPI_ExecuteRequestWithMetadata(t *testing.T) {
 	}
 
 	// This will fail because socket is not connected, but should return true
-	success, err := api.ExecuteRequestWithMetadata("ledger-id", "GET", "/api/users", metadata, c)
+	success, err := api.ExecuteRequestWithMetadata("ledger-id", "GET", "/api/users", metadata, c, false)
 	assert.NoError(t, err)
 	assert.True(t, success)
 }

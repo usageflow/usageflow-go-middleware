@@ -14,9 +14,7 @@ import (
 )
 
 const (
-	// defaultWSURL    = "wss://api.usageflow.io/ws"
-	defaultWSURL = "ws://localhost:9000/ws"
-
+	defaultWSURL      = "wss://api.usageflow.io/ws"
 	defaultPoolSize   = 10
 	reconnectDelay    = 5 * time.Second
 	requestTimeout    = 2 * time.Second

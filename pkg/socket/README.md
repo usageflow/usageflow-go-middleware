@@ -5,6 +5,7 @@ The `socket` package provides WebSocket connection management for real-time comm
 ## Overview
 
 This package implements:
+
 - Connection pooling for high throughput
 - Automatic reconnection with exponential backoff
 - Ping/pong health monitoring
@@ -31,6 +32,7 @@ type UsageFlowSocketManager struct {
 ```
 
 **Features:**
+
 - Connection pooling (default: 10 connections)
 - Least-busy connection selection
 - Round-robin load distribution
@@ -63,6 +65,7 @@ manager := socket.NewUsageFlowSocketManager("api-key", 5) // Custom pool size
 ```
 
 **Initialization:**
+
 - Creates connection pool (default: 10 connections)
 - Establishes all connections in parallel
 - Sets up ping/pong handlers
@@ -73,6 +76,7 @@ manager := socket.NewUsageFlowSocketManager("api-key", 5) // Custom pool size
 Establishes all WebSocket connections in the pool.
 
 **Behavior:**
+
 - Creates connections in parallel
 - Retries failed connections in background
 - Thread-safe (uses connectionMutex)
@@ -92,6 +96,7 @@ response, err := manager.SendAsync(&socket.UsageFlowSocketMessage{
 ```
 
 **Features:**
+
 - Automatic connection selection (least-busy)
 - Request/response correlation via unique IDs
 - Timeout handling (default: 2 seconds)
@@ -112,11 +117,13 @@ Checks if at least one connection is active.
 ### Automatic Reconnection
 
 **Triggers:**
+
 - Connection close detected
 - Read error (server restart, network issue)
 - Ping failure
 
 **Strategy:**
+
 - Exponential backoff (5s, 10s, 20s, 40s, 60s max)
 - Maximum 5 retry attempts
 - Background reconnection (non-blocking)
@@ -124,12 +131,14 @@ Checks if at least one connection is active.
 ### Health Monitoring
 
 **Ping/Pong Mechanism:**
+
 - Ping sent every 30 seconds
 - Pong timeout: 60 seconds
 - Read deadline extended on successful pong
 - Connection marked dead on ping failure
 
 **Read Deadline:**
+
 - Initial: 60 seconds
 - Extended on: successful read, pong received
 - Timeout triggers reconnection
@@ -194,8 +203,7 @@ type UseAllocationRequest struct {
 
 ```go
 const (
-    defaultWSURL      = "ws://localhost:9000/ws" // Development
-    // defaultWSURL  = "wss://api.usageflow.io/ws" // Production
+    defaultWSURL  = "wss://api.usageflow.io/ws"
     defaultPoolSize   = 10
     reconnectDelay    = 5 * time.Second
     requestTimeout    = 2 * time.Second
@@ -238,6 +246,7 @@ const (
 ## Thread Safety
 
 All operations are thread-safe:
+
 - **Read operations**: Use `sync.RWMutex` (multiple concurrent reads)
 - **Write operations**: Use `sync.Mutex` (exclusive access)
 - **Connection access**: Protected by connection-specific mutex
@@ -255,24 +264,24 @@ import (
 func main() {
     // Create manager
     manager := socket.NewUsageFlowSocketManager("api-key", 5)
-    
+
     // Send async request
     response, err := manager.SendAsync(&socket.UsageFlowSocketMessage{
         Type: "get_application_policies",
         Payload: nil,
     })
-    
+
     if err != nil {
         // Handle error
         return
     }
-    
+
     // Process response
     if response.Error != "" {
         // Handle error response
         return
     }
-    
+
     // Use response.Payload
 }
 ```
@@ -291,4 +300,3 @@ func main() {
 - **Parallel Connections**: Established in parallel
 - **Least-Busy Selection**: Distributes load evenly
 - **Non-blocking Reconnection**: Doesn't block request processing
-

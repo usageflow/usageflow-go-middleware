@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 	"github.com/usageflow/usageflow-go-middleware/v2/pkg/config"
 	"github.com/usageflow/usageflow-go-middleware/v2/pkg/socket"
 )
@@ -23,6 +24,7 @@ type UsageFlowAPI struct {
 	APIKey                      string                     `json:"apiKey"`
 	ApplicationId               string                     `json:"applicationId"`
 	ApiConfig                   []config.ApiConfigStrategy `json:"apiConfig"`
+	BlockedEndpoints            map[string]bool            `json:"blockedEndpoints"`
 	ApplicationEndpointPolicies *config.PolicyResponse     `json:"applicationEndpointPolicies"`
 	policyMap                   PolicyMap
 	mu                          sync.RWMutex
@@ -95,13 +97,13 @@ func (u *UsageFlowAPI) RequestInterceptor(routes, whiteListRoutes []config.Route
 		// Process request with UsageFlow logic
 		metadata := u.collectRequestMetadata(c)
 		ledgerId := u.GuessLedgerId(c)
-		userIdentifierSuffix := u.GetUserPrefix(c, method, url)
+		userIdentifierSuffix, rateLimited := u.GetUserPrefix(c, method, url)
 
 		if userIdentifierSuffix != "" {
 			ledgerId = fmt.Sprintf("%s %s", ledgerId, userIdentifierSuffix)
 		}
 
-		success, err := u.ExecuteRequestWithMetadata(ledgerId, method, url, metadata, c)
+		success, err := u.ExecuteRequestWithMetadata(ledgerId, method, url, metadata, c, rateLimited)
 		if err != nil {
 			// If socket is not connected, continue normally instead of aborting
 			u.mu.RLock()
@@ -111,7 +113,13 @@ func (u *UsageFlowAPI) RequestInterceptor(routes, whiteListRoutes []config.Route
 				c.Next()
 				return
 			}
-			c.AbortWithStatusJSON(500, gin.H{"error": "Failed to process request"})
+			errorMessage := err.Error()
+			if errorMessage == "endpoints is blocked" {
+				c.AbortWithStatusJSON(403, gin.H{"error": "endpoint_blocked", "message": "UsageFlow blocked this endpoint by policy rule."})
+				return
+			}
+
+			c.AbortWithStatusJSON(402, gin.H{"error": "insufficient_resources", "message": "UsageFlow blocked this request because the user has no remaining resources."})
 			return
 		}
 		if !success {
@@ -186,13 +194,71 @@ func (u *UsageFlowAPI) FetchApiConfig() ([]config.ApiConfigStrategy, error) {
 	return policyList.Policies, nil
 }
 
-func (u *UsageFlowAPI) allocateRequest(ledgerId string, amount *float64, metadata map[string]interface{}) (string, error) {
+func (u *UsageFlowAPI) FetchBlockedEndpoints() error {
+	response, err := u.socketManager.SendAsync(&socket.UsageFlowSocketMessage{
+		Type: "get_blocked_endpoints",
+	})
+
+	if err != nil {
+		return nil
+	}
+
+	// Convert the response payload to BlockedEndpoints
+	var blockedEndpointsResponse config.BlockedEndpointsResponse
+
+	// The response payload is a map[string]interface{}
+	payloadMap, ok := response.Payload.(map[string]interface{})
+	if !ok {
+		return fmt.Errorf("unexpected payload type for blocked endpoints")
+	}
+
+	// Marshal the map to JSON bytes, then unmarshal into the struct
+	payloadBytes, err := json.Marshal(payloadMap)
+	if err != nil {
+		return fmt.Errorf("failed to marshal blocked endpoints payload: %v", err)
+	}
+
+	if err := json.Unmarshal(payloadBytes, &blockedEndpointsResponse); err != nil {
+		return fmt.Errorf("failed to unmarshal blocked endpoints: %v", err)
+	}
+
+	if len(blockedEndpointsResponse.Endpoints) == 0 {
+		u.mu.Lock()
+		u.BlockedEndpoints = make(map[string]bool)
+		u.mu.Unlock()
+
+		return nil
+	}
+
+	blockedEndpointsMap := make(map[string]bool)
+
+	for _, endpoint := range blockedEndpointsResponse.Endpoints {
+		blockKey := fmt.Sprintf("%s %s", endpoint.Method, endpoint.Url)
+		if endpoint.Identity != "" {
+			blockKey = fmt.Sprintf("%s %s", blockKey, endpoint.Identity)
+		}
+		blockedEndpointsMap[blockKey] = true
+	}
+
+	u.mu.Lock()
+	u.BlockedEndpoints = blockedEndpointsMap
+	u.mu.Unlock()
+
+	return nil
+}
+
+func (u *UsageFlowAPI) allocateRequest(ledgerId string, amount *float64, metadata map[string]interface{}, rateLimited bool) (string, error) {
 	// Check if socket is connected (this updates the status)
 	connected := u.isConnected()
 
 	// If not connected, skip and return empty allocation ID (continue normally)
 	if !connected {
 		return "", nil
+	}
+
+	found := u.BlockedEndpoints[ledgerId]
+	if found {
+		return "", fmt.Errorf("endpoints is blocked")
 	}
 
 	var amt float64 = 1
@@ -206,6 +272,19 @@ func (u *UsageFlowAPI) allocateRequest(ledgerId string, amount *float64, metadat
 		Amount:   amt,
 		Metadata: metadata,
 	}
+
+	if !rateLimited {
+		allocationId := uuid.New().String()
+		payload.AllocationID = &allocationId
+
+		u.socketManager.Send(&socket.UsageFlowSocketMessage{
+			Type:    "request_for_allocation",
+			Payload: payload,
+		})
+
+		return allocationId, nil
+	}
+
 	response, err := u.socketManager.SendAsync(&socket.UsageFlowSocketMessage{
 		Type:    "request_for_allocation",
 		Payload: payload,
@@ -237,7 +316,7 @@ func (u *UsageFlowAPI) allocateRequest(ledgerId string, amount *float64, metadat
 	return allocationId, nil
 }
 
-func (u *UsageFlowAPI) useAllocationRequest(ledgerId string, amount *float64, allocationId string, metadata map[string]interface{}) (bool, error) {
+func (u *UsageFlowAPI) useAllocationRequest(ledgerId string, amount *float64, allocationId string, metadata map[string]interface{}, rateLimited bool) (bool, error) {
 	// Check if socket is connected
 	connected := u.isConnected()
 
@@ -263,6 +342,16 @@ func (u *UsageFlowAPI) useAllocationRequest(ledgerId string, amount *float64, al
 		AllocationID: allocationId,
 		Metadata:     metadata,
 	}
+
+	if rateLimited {
+		u.socketManager.Send(&socket.UsageFlowSocketMessage{
+			Type:    "use_allocation",
+			Payload: payload,
+		})
+
+		return true, nil
+	}
+
 	response, err := u.socketManager.SendAsync(&socket.UsageFlowSocketMessage{
 		Type:    "use_allocation",
 		Payload: payload,
@@ -288,13 +377,15 @@ func (u *UsageFlowAPI) useAllocationRequest(ledgerId string, amount *float64, al
 }
 
 // ExecuteRequestWithMetadata executes the initial allocation request
-func (u *UsageFlowAPI) ExecuteRequestWithMetadata(ledgerId, method, url string, metadata map[string]interface{}, c *gin.Context) (bool, error) {
+func (u *UsageFlowAPI) ExecuteRequestWithMetadata(ledgerId, method, url string, metadata map[string]interface{}, c *gin.Context, rateLimited bool) (bool, error) {
 	amount := float64(1)
-	allocationId, err := u.allocateRequest(ledgerId, &amount, metadata)
+	allocationId, err := u.allocateRequest(ledgerId, &amount, metadata, rateLimited)
 	if err != nil {
 		return false, err
 	}
+
 	c.Set("eventId", allocationId)
+	c.Set("rateLimited", rateLimited)
 
 	return true, nil
 }
@@ -341,9 +432,15 @@ func (u *UsageFlowAPI) ExecuteFulfillRequestWithMetadata(ledgerId, method, url s
 
 	metadata["requestDuration"] = requestDuration.Milliseconds()
 
+	rateLimited, _ := c.Get("rateLimited")
+	isRateLimited, ok := rateLimited.(bool)
+	if !ok {
+		isRateLimited = false
+	}
+
 	amount := float64(1)
 
-	success, err := u.useAllocationRequest(ledgerId, &amount, allocationId.(string), metadata)
+	success, err := u.useAllocationRequest(ledgerId, &amount, allocationId.(string), metadata, isRateLimited)
 	if err != nil {
 		// On error, return success to continue normally
 		return true, nil
@@ -488,19 +585,24 @@ func isRouteMonitored(method, url string, routesMap map[string]map[string]bool) 
 }
 
 // GetUserPrefix attempts to extract a user identifier prefix based on the API configuration
-func (u *UsageFlowAPI) GetUserPrefix(c *gin.Context, method, url string) string {
+func (u *UsageFlowAPI) GetUserPrefix(c *gin.Context, method, url string) (string, bool) {
 	u.mu.RLock()
 	config := u.ApiConfig
 	u.mu.RUnlock()
 
 	if config == nil {
-		return ""
+		return "", false
 	}
 
 	var identifier string
+	var rateLimited bool
 
 	// Find matching config for current method and url
 	for _, cfg := range config {
+		if cfg.HasRateLimit {
+			rateLimited = true
+		}
+
 		// Check if this config matches the current method and url
 		if cfg.Method != method || cfg.Url != url {
 			continue
@@ -553,8 +655,8 @@ func (u *UsageFlowAPI) GetUserPrefix(c *gin.Context, method, url string) string 
 	}
 
 	if identifier != "" {
-		return TransformToLedgerId(identifier)
+		return TransformToLedgerId(identifier), rateLimited
 	}
 
-	return ""
+	return "", false
 }

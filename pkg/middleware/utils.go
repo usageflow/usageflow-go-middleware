@@ -20,7 +20,8 @@ var (
 func (u *UsageFlowAPI) StartConfigUpdater() {
 	once.Do(func() {
 		// Immediately fetch config
-		u.FetchApiConfig()
+		go u.FetchApiConfig()
+		go u.FetchBlockedEndpoints()
 
 		// Start periodic updates every 30 seconds
 		go func() {
@@ -29,6 +30,7 @@ func (u *UsageFlowAPI) StartConfigUpdater() {
 
 			for range ticker.C {
 				u.FetchApiConfig()
+				u.FetchBlockedEndpoints()
 			}
 		}()
 	})

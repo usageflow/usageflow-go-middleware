@@ -19,9 +19,10 @@ type UsageFlowSocketResponse struct {
 
 // RequestForAllocation represents the payload for allocation requests
 type RequestForAllocation struct {
-	Alias    string                 `json:"alias"`
-	Amount   float64                `json:"amount"`
-	Metadata map[string]interface{} `json:"metadata,omitempty"`
+	Alias        string                 `json:"alias"`
+	Amount       float64                `json:"amount"`
+	Metadata     map[string]interface{} `json:"metadata,omitempty"`
+	AllocationID *string                `json:"allocationId,omitempty"`
 }
 
 // UseAllocationRequest represents the payload for using an allocation

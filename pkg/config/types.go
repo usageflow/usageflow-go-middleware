@@ -12,6 +12,18 @@ type ApiConfigStrategy struct {
 	Method                string  `bson:"method" json:"method"`
 	IdentityFieldName     *string `bson:"identityFieldName,omitempty" json:"identityFieldName,omitempty"`
 	IdentityFieldLocation *string `bson:"identityFieldLocation,omitempty" json:"identityFieldLocation,omitempty"`
+	HasRateLimit          bool    `bson:"hasRateLimit, default=false" json:"hasRateLimit"`
+}
+
+type BlockedEndpointsResponse struct {
+	Endpoints []BlockedEndpoints `bson:"endpoints" json:"endpoints"`
+	Total     int                `bson:"total" json:"total"`
+}
+
+type BlockedEndpoints struct {
+	Url      string `bson:"url" json:"url"`
+	Method   string `bson:"method" json:"method"`
+	Identity string `bson:"identity" json:"identity"`
 }
 
 type ApplicationEndpointPolicy struct {
