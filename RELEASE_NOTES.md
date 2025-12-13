@@ -1,6 +1,86 @@
 # Release Notes
 
-## v2.1.0 (Latest)
+## v2.2.0 (Latest)
+
+### Major Simplification: Server-Driven Configuration
+
+This release significantly simplifies middleware initialization and configuration management by moving all route configuration to the server side. The middleware now only requires an API key to get started.
+
+### New Features
+
+#### Simplified Middleware Initialization
+
+- **API Key Only**: Middleware initialization now only requires an API key - no need to manually configure routes or whitelist endpoints
+- **Automatic Route Fetching**: Monitoring paths and whitelist endpoints are automatically fetched from UsageFlow servers every 30 seconds
+- **Server-Driven Configuration**: All route configuration is now managed centrally on UsageFlow servers, eliminating the need for local route management
+
+#### Server-Driven Route Configuration
+
+- **Automatic Route Management**: Added `FetchApplicationConfig()` method that automatically fetches monitoring paths and whitelist endpoints from UsageFlow servers
+- **Dynamic Route Updates**: Routes are automatically updated every 30 seconds from the server, ensuring your middleware always uses the latest configuration
+- **Centralized Configuration**: Route configuration is now managed in one place (UsageFlow dashboard), making it easier to update and maintain across multiple services
+
+### API Changes
+
+#### Server-Driven Route Configuration
+
+- **Automatic Route Fetching**: Routes and whitelist endpoints are now automatically fetched from UsageFlow servers. The `RequestInterceptor()` API remains the same (no parameters), but routes are now managed server-side:
+
+  ```go
+  // Usage remains the same
+  uf.RequestInterceptor()
+  ```
+
+- **Zero Local Configuration**: No need to manually define routes in code - everything is fetched from the server automatically
+
+#### New Methods
+
+- **`FetchApplicationConfig()`**: Automatically fetches application configuration including monitoring paths and whitelist endpoints from UsageFlow servers
+
+#### New Fields
+
+- **`WhitelistEndpoints`**: Stores whitelist endpoints fetched from server
+- **`MonitoringPaths`**: Stores monitoring paths fetched from server
+- **`monitoringPathsMap`**: Internal map for efficient route lookup
+- **`whitelistEndpointsMap`**: Internal map for efficient whitelist lookup
+
+### Improvements
+
+- **Simplified API**: Reduced complexity by removing the need to manually manage routes
+- **Automatic Updates**: Route configuration is automatically synchronized with UsageFlow servers
+- **Code Cleanup**: Removed all commented-out code for cleaner codebase
+- **Background Updates**: Application config fetching runs in background goroutines to avoid blocking initialization
+
+### Migration Guide
+
+For users upgrading from v2.1.0:
+
+1. **No code changes required**: The `RequestInterceptor()` API remains the same - no parameters needed
+
+2. **Configure routes in UsageFlow dashboard**: Routes and whitelist endpoints should now be configured in your UsageFlow dashboard instead of being managed locally. The middleware will automatically fetch and use these routes.
+
+3. **No action needed for**:
+   - Basic middleware initialization (still just needs API key)
+   - `RequestInterceptor()` usage (API unchanged)
+   - Other middleware functionality (all remains the same)
+
+### Benefits
+
+- **Easier Setup**: Only need to provide API key - no route configuration needed
+- **Centralized Management**: Update routes in one place (UsageFlow dashboard) instead of redeploying code
+- **Automatic Synchronization**: Routes are always up-to-date with server configuration
+- **Reduced Code Complexity**: Less code to write and maintain
+
+### Technical Details
+
+- **Config Update Interval**: Application config is fetched every 30 seconds along with API config and blocked endpoints
+- **Thread-Safe**: All route maps are protected by mutex locks for concurrent access
+- **Automatic Initialization**: Application config fetching starts automatically when middleware is initialized
+- **Graceful Degradation**: Middleware continues to function even if server is temporarily unavailable
+
+---
+
+## v2.1.0
 
 ### New Features
 

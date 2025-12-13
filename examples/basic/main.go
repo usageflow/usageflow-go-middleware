@@ -2,9 +2,9 @@ package main
 
 import (
 	"log"
+	"os"
 
 	"github.com/gin-gonic/gin"
-	"github.com/usageflow/usageflow-go-middleware/v2/pkg/config"
 	"github.com/usageflow/usageflow-go-middleware/v2/pkg/middleware"
 )
 
@@ -13,24 +13,10 @@ func main() {
 	r := gin.Default()
 
 	// Initialize UsageFlow middleware
-	uf := middleware.New("your-api-key")
-
-	// Define routes to monitor
-	routes := []config.Route{
-		{Method: "GET", URL: "/api/users"},
-		{Method: "GET", URL: "/api/users/:userId"},
-		{Method: "POST", URL: "/api/data"},
-		{Method: "*", URL: "*"}, // Wildcard example
-	}
-
-	// Define whitelist routes (optional)
-	whiteList := []config.Route{
-		{Method: "GET", URL: "/health"},
-		{Method: "GET", URL: "/metrics"},
-	}
+	uf := middleware.New(os.Getenv("USAGEFLOW_API_KEY"))
 
 	// Use the middleware
-	r.Use(uf.RequestInterceptor(routes, whiteList))
+	r.Use(uf.RequestInterceptor())
 
 	// Define your routes
 	r.GET("/api/go/users", func(c *gin.Context) {

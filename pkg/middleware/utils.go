@@ -22,7 +22,7 @@ func (u *UsageFlowAPI) StartConfigUpdater() {
 		// Immediately fetch config
 		go u.FetchApiConfig()
 		go u.FetchBlockedEndpoints()
-
+		go u.FetchApplicationConfig()
 		// Start periodic updates every 30 seconds
 		go func() {
 			ticker := time.NewTicker(30 * time.Second)
@@ -31,6 +31,7 @@ func (u *UsageFlowAPI) StartConfigUpdater() {
 			for range ticker.C {
 				u.FetchApiConfig()
 				u.FetchBlockedEndpoints()
+				u.FetchApplicationConfig()
 			}
 		}()
 	})
@@ -101,4 +102,21 @@ func GetRequestBody(c *gin.Context) (string, error) {
 	}
 
 	return string(body), nil
+}
+
+func ConvertToType[T any](obj any) (T, error) {
+	var zero T
+
+	jsonData, err := json.Marshal(obj)
+	if err != nil {
+		return zero, err
+	}
+
+	var result T
+	err = json.Unmarshal(jsonData, &result)
+	if err != nil {
+		return zero, err
+	}
+
+	return result, nil
 }

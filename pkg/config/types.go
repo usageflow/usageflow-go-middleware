@@ -5,6 +5,11 @@ type PolicyListResponse struct {
 	Total    int                 `json:"total"`
 }
 
+type ApplicationConfigResponse struct {
+	MonitorPaths       []interface{} `json:"monitoringPaths"`
+	WhitelistEndpoints []interface{} `json:"whitelistEndpoints"`
+}
+
 // ApiConfigStrategy represents the configuration strategy for the API
 // Matches UsageFlowConfig interface: url, method, identityFieldName?, identityFieldLocation?
 type ApiConfigStrategy struct {

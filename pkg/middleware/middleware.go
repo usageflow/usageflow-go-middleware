@@ -26,10 +26,14 @@ type UsageFlowAPI struct {
 	ApiConfig                   []config.ApiConfigStrategy `json:"apiConfig"`
 	BlockedEndpoints            map[string]bool            `json:"blockedEndpoints"`
 	ApplicationEndpointPolicies *config.PolicyResponse     `json:"applicationEndpointPolicies"`
+	WhitelistEndpoints          []config.Route             `json:"whitelistEndpoints"`
+	MonitoringPaths             []config.Route             `json:"monitoringPaths"`
 	policyMap                   PolicyMap
 	mu                          sync.RWMutex
 	socketManager               *socket.UsageFlowSocketManager
 	connected                   bool // Tracks socket connection status
+	monitoringPathsMap          map[string]map[string]bool
+	whitelistEndpointsMap       map[string]map[string]bool
 }
 
 // New creates a new instance of UsageFlowAPI
@@ -45,47 +49,24 @@ func New(apiKey string) *UsageFlowAPI {
 }
 
 // RequestInterceptor creates a Gin middleware for intercepting requests
-func (u *UsageFlowAPI) RequestInterceptor(routes, whiteListRoutes []config.Route) gin.HandlerFunc {
-	defaultWhiteListRoutes := []config.Route{
-		{Method: "POST", URL: "/api/v1/ledgers/measure/allocate/use"},
-		{Method: "POST", URL: "/api/v1/ledgers/measure/allocate"},
-	}
-
-	// Combine provided whiteListRoutes with the default ones
-	whiteListRoutes = append(whiteListRoutes, defaultWhiteListRoutes...)
-
-	routesMap := make(map[string]map[string]bool)
-	whiteListRoutesMap := make(map[string]map[string]bool)
-
-	populateMap := func(targetMap map[string]map[string]bool, routes []config.Route) {
-		for _, route := range routes {
-			if _, exists := targetMap[route.Method]; !exists {
-				targetMap[route.Method] = make(map[string]bool)
-			}
-			targetMap[route.Method][route.URL] = true
-		}
-	}
-
-	populateMap(routesMap, routes)
-	populateMap(whiteListRoutesMap, whiteListRoutes)
-
+func (u *UsageFlowAPI) RequestInterceptor() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		method := c.Request.Method
 		url := GetPatternedURL(c)
 
-		if len(routesMap) == 0 {
+		if len(u.monitoringPathsMap) == 0 {
 			c.Next()
 			return
 		}
 
 		// Check whitelist
-		if isWhitelisted(method, url, whiteListRoutesMap) {
+		if isWhitelisted(method, url, u.whitelistEndpointsMap) {
 			c.Next()
 			return
 		}
 
 		// Check if route should be monitored
-		if !isRouteMonitored(method, url, routesMap) {
+		if !isRouteMonitored(method, url, u.monitoringPathsMap) {
 			c.Next()
 			return
 		}
@@ -192,6 +173,69 @@ func (u *UsageFlowAPI) FetchApiConfig() ([]config.ApiConfigStrategy, error) {
 	u.mu.Unlock()
 
 	return policyList.Policies, nil
+}
+
+func (u *UsageFlowAPI) FetchApplicationConfig() (config.ApplicationConfigResponse, error) {
+	response, err := u.socketManager.SendAsync(&socket.UsageFlowSocketMessage{
+		Type: "get_application_config",
+	})
+
+	var applicationConfigResponse config.ApplicationConfigResponse
+	if err != nil {
+		return applicationConfigResponse, err
+	}
+
+	// The response payload is a map[string]interface{}
+	payloadMap, ok := response.Payload.(map[string]interface{})
+	if !ok {
+		return applicationConfigResponse, fmt.Errorf("unexpected payload type for application config")
+	}
+
+	// Marshal the map to JSON bytes, then unmarshal into the struct
+	payloadBytes, err := json.Marshal(payloadMap)
+	if err != nil {
+		return applicationConfigResponse, fmt.Errorf("failed to marshal application config payload: %v", err)
+	}
+
+	if err := json.Unmarshal(payloadBytes, &applicationConfigResponse); err != nil {
+		return applicationConfigResponse, fmt.Errorf("failed to unmarshal application config: %v", err)
+	}
+
+	// Update ApiConfig with lock
+	u.mu.Lock()
+	whitelistEndpoints, err := ConvertToType[[]config.Route](applicationConfigResponse.WhitelistEndpoints)
+	if err != nil {
+		return applicationConfigResponse, fmt.Errorf("failed to convert whitelist endpoints: %v", err)
+	}
+	monitorPaths, err := ConvertToType[[]config.Route](applicationConfigResponse.MonitorPaths)
+	if err != nil {
+		return applicationConfigResponse, fmt.Errorf("failed to convert monitor paths: %v", err)
+	}
+
+	u.WhitelistEndpoints = whitelistEndpoints
+	u.MonitoringPaths = monitorPaths
+
+	routesMap := make(map[string]map[string]bool)
+	whiteListRoutesMap := make(map[string]map[string]bool)
+
+	populateMap := func(targetMap map[string]map[string]bool, routes []config.Route) {
+		for _, route := range routes {
+			if _, exists := targetMap[route.Method]; !exists {
+				targetMap[route.Method] = make(map[string]bool)
+			}
+			targetMap[route.Method][route.URL] = true
+		}
+	}
+
+	populateMap(routesMap, u.MonitoringPaths)
+	populateMap(whiteListRoutesMap, u.WhitelistEndpoints)
+
+	u.monitoringPathsMap = routesMap
+	u.whitelistEndpointsMap = whiteListRoutesMap
+
+	u.mu.Unlock()
+
+	return applicationConfigResponse, nil
 }
 
 func (u *UsageFlowAPI) FetchBlockedEndpoints() error {
@@ -352,26 +396,10 @@ func (u *UsageFlowAPI) useAllocationRequest(ledgerId string, amount *float64, al
 		return true, nil
 	}
 
-	response, err := u.socketManager.SendAsync(&socket.UsageFlowSocketMessage{
+	u.socketManager.Send(&socket.UsageFlowSocketMessage{
 		Type:    "use_allocation",
 		Payload: payload,
 	})
-	if err != nil {
-		// Update connection status on error
-		u.mu.Lock()
-		u.connected = false
-		u.mu.Unlock()
-		// Return success to continue normally
-		return true, nil
-	}
-
-	// The response payload is a map[string]interface{}
-	// We just need to verify the response was successful
-	_, ok := response.Payload.(map[string]interface{})
-	if !ok {
-		// Continue normally on unexpected response
-		return true, nil
-	}
 
 	return true, nil
 }
