@@ -247,3 +247,163 @@ func createTestJWT(payload string) string {
 func base64Encode(s string) string {
 	return base64.RawURLEncoding.EncodeToString([]byte(s))
 }
+
+func TestGetCookieValue(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	tests := []struct {
+		name       string
+		cookieName string
+		cookie     string
+		expected   string
+	}{
+		{
+			name:       "simple cookie",
+			cookieName: "sessionId",
+			cookie:     "sessionId=abc123",
+			expected:   "abc123",
+		},
+		{
+			name:       "multiple cookies",
+			cookieName: "sessionId",
+			cookie:     "sessionId=abc123; other=value; another=test",
+			expected:   "abc123",
+		},
+		{
+			name:       "case insensitive cookie name",
+			cookieName: "SESSIONID",
+			cookie:     "sessionId=abc123",
+			expected:   "abc123",
+		},
+		{
+			name:       "cookie with equals in value",
+			cookieName: "token",
+			cookie:     "token=abc=123=xyz; other=value",
+			expected:   "abc=123=xyz",
+		},
+		{
+			name:       "cookie not found",
+			cookieName: "missing",
+			cookie:     "sessionId=abc123; other=value",
+			expected:   "",
+		},
+		{
+			name:       "empty cookie header",
+			cookieName: "sessionId",
+			cookie:     "",
+			expected:   "",
+		},
+		{
+			name:       "Cookie header with capital C",
+			cookieName: "sessionId",
+			cookie:     "sessionId=abc123",
+			expected:   "abc123",
+		},
+		{
+			name:       "cookie with spaces",
+			cookieName: "sessionId",
+			cookie:     "sessionId = abc123 ; other = value",
+			expected:   "abc123",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(w)
+			c.Request = httptest.NewRequest("GET", "/", nil)
+			if tt.cookie != "" {
+				c.Request.Header.Set("Cookie", tt.cookie)
+			}
+
+			result := GetCookieValue(c, tt.cookieName)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+func TestParseJwtCookieField(t *testing.T) {
+	tests := []struct {
+		name        string
+		fieldName   string
+		expected    *JwtCookieInfo
+		description string
+	}{
+		{
+			name:      "valid JWT cookie format",
+			fieldName: "[technique=jwt]sessionToken[pick=userId]",
+			expected: &JwtCookieInfo{
+				CookieName: "sessionToken",
+				Claim:      "userId",
+			},
+			description: "Should parse valid JWT cookie format",
+		},
+		{
+			name:      "valid JWT cookie format with sub claim",
+			fieldName: "[technique=jwt]authToken[pick=sub]",
+			expected: &JwtCookieInfo{
+				CookieName: "authToken",
+				Claim:      "sub",
+			},
+			description: "Should parse JWT cookie format with sub claim",
+		},
+		{
+			name:      "valid JWT cookie format with spaces",
+			fieldName: "[technique=jwt] sessionToken [pick=userId]",
+			expected: &JwtCookieInfo{
+				CookieName: "sessionToken",
+				Claim:      "userId",
+			},
+			description: "Should parse JWT cookie format with spaces (trimmed)",
+		},
+		{
+			name:        "invalid technique",
+			fieldName:   "[technique=invalid]sessionToken[pick=userId]",
+			expected:    nil,
+			description: "Should return nil for non-jwt technique",
+		},
+		{
+			name:        "missing technique",
+			fieldName:   "sessionToken[pick=userId]",
+			expected:    nil,
+			description: "Should return nil when technique is missing",
+		},
+		{
+			name:        "missing pick",
+			fieldName:   "[technique=jwt]sessionToken",
+			expected:    nil,
+			description: "Should return nil when pick is missing",
+		},
+		{
+			name:        "empty cookie name",
+			fieldName:   "[technique=jwt][pick=userId]",
+			expected:    nil,
+			description: "Should return nil when cookie name is empty",
+		},
+		{
+			name:        "standard cookie format",
+			fieldName:   "sessionToken",
+			expected:    nil,
+			description: "Should return nil for standard cookie format",
+		},
+		{
+			name:        "empty string",
+			fieldName:   "",
+			expected:    nil,
+			description: "Should return nil for empty string",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := ParseJwtCookieField(tt.fieldName)
+			if tt.expected == nil {
+				assert.Nil(t, result, tt.description)
+			} else {
+				assert.NotNil(t, result, tt.description)
+				assert.Equal(t, tt.expected.CookieName, result.CookieName, "Cookie name should match")
+				assert.Equal(t, tt.expected.Claim, result.Claim, "Claim should match")
+			}
+		})
+	}
+}

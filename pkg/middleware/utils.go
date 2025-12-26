@@ -86,8 +86,11 @@ func DecodeJWTUnverified(token string) (map[string]interface{}, error) {
 
 // TransformToLedgerId converts an input string to a valid ledger ID format
 func TransformToLedgerId(input string) string {
-	re := regexp.MustCompile(`[^a-zA-Z0-9]+`)
-	return re.ReplaceAllString(strings.ToLower(input), "_")
+	// TODO: Need to verify this logic.
+	// re := regexp.MustCompile(`[^a-zA-Z0-9]+`)
+	// return re.ReplaceAllString(strings.ToLower(input), "_")
+
+	return input
 }
 
 // GetRequestBody reads and returns the request body as a string
@@ -119,4 +122,78 @@ func ConvertToType[T any](obj any) (T, error) {
 	}
 
 	return result, nil
+}
+
+// GetCookieValue extracts a specific cookie value from the Cookie header
+// It handles both "cookie" and "Cookie" header names (case-insensitive)
+func GetCookieValue(c *gin.Context, cookieName string) string {
+	// Try lowercase first
+	cookieHeader := c.GetHeader("cookie")
+	if cookieHeader == "" {
+		// Try capitalized
+		cookieHeader = c.GetHeader("Cookie")
+	}
+	if cookieHeader == "" {
+		return ""
+	}
+
+	// Parse cookies from the Cookie header string
+	// Format: "name1=value1; name2=value2; name3=value3"
+	cookies := strings.Split(cookieHeader, ";")
+	for _, cookie := range cookies {
+		parts := strings.SplitN(strings.TrimSpace(cookie), "=", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		name := strings.TrimSpace(parts[0])
+		value := strings.TrimSpace(parts[1])
+
+		// Case-insensitive comparison
+		if strings.EqualFold(name, cookieName) {
+			return value
+		}
+	}
+
+	return ""
+}
+
+// JwtCookieInfo represents parsed JWT cookie information
+type JwtCookieInfo struct {
+	CookieName string
+	Claim      string
+}
+
+// ParseJwtCookieField parses JWT cookie field format: '[technique=jwt]cookieName[pick=claim]'
+// Returns the cookie name and claim if the format matches, otherwise returns nil
+func ParseJwtCookieField(fieldName string) *JwtCookieInfo {
+	// Match [technique=jwt] at the start
+	techniqueRegex := regexp.MustCompile(`^\[technique=([^\]]+)\]`)
+	techniqueMatch := techniqueRegex.FindStringSubmatch(fieldName)
+	if techniqueMatch == nil || techniqueMatch[1] != "jwt" {
+		return nil
+	}
+
+	// Match [pick=claim] somewhere in the string
+	pickRegex := regexp.MustCompile(`\[pick=([^\]]+)\]`)
+	pickMatch := pickRegex.FindStringSubmatch(fieldName)
+	if pickMatch == nil {
+		return nil
+	}
+
+	// Extract cookie name: everything between [technique=jwt] and [pick=...]
+	techniqueEnd := len(techniqueMatch[0])
+	pickStart := strings.Index(fieldName, "[pick=")
+	if pickStart == -1 || pickStart <= techniqueEnd {
+		return nil
+	}
+
+	cookieName := strings.TrimSpace(fieldName[techniqueEnd:pickStart])
+	if cookieName == "" {
+		return nil
+	}
+
+	return &JwtCookieInfo{
+		CookieName: cookieName,
+		Claim:      pickMatch[1],
+	}
 }

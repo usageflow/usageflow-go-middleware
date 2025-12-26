@@ -1,6 +1,145 @@
 # Release Notes
 
-## v2.2.0 (Latest)
+## v2.3.0 (Latest)
+
+### New Features
+
+#### Cookie Extraction Support
+
+- **Standard Cookie Extraction**: Added support for extracting user identifiers from HTTP cookies. You can now use cookies as an identity field location in your API configuration.
+- **JWT Cookie Support**: Added support for extracting claims from JWT tokens stored in cookies using the format `[technique=jwt]cookieName[pick=claim]`.
+- **Flexible Cookie Naming**: Supports both direct cookie name access and `cookie.cookieName` format for clarity.
+- **Case-Insensitive Matching**: Cookie name matching is case-insensitive, making it more robust across different browsers and clients.
+
+#### Cookie Extraction Methods
+
+1. **Standard Cookie Extraction**:
+   - Extract identifier directly from cookie value
+   - Supports format: `cookie.cookieName` or just `cookieName`
+   - Example: Extract `sessionId` cookie value as user identifier
+
+2. **JWT Cookie Extraction**:
+   - Extract specific claims from JWT tokens stored in cookies
+   - Format: `[technique=jwt]cookieName[pick=claim]`
+   - Example: Extract `userId` claim from JWT stored in `sessionToken` cookie
+
+### API Changes
+
+#### New Identity Field Location
+
+Added `"cookie"` as a new identity field location option:
+
+```go
+// Standard cookie extraction
+{
+    Url:                   "/api/session",
+    Method:                "GET",
+    IdentityFieldName:     stringPtr("sessionId"),
+    IdentityFieldLocation: stringPtr("cookie"),
+}
+
+// JWT cookie extraction
+{
+    Url:                   "/api/auth",
+    Method:                "GET",
+    IdentityFieldName:     stringPtr("[technique=jwt]sessionToken[pick=userId]"),
+    IdentityFieldLocation: stringPtr("cookie"),
+}
+```
+
+#### New Helper Functions
+
+- **`GetCookieValue()`**: Extracts a specific cookie value from the Cookie header (case-insensitive)
+- **`ParseJwtCookieField()`**: Parses JWT cookie field format and returns cookie name and claim
+
+### Usage Examples
+
+#### Standard Cookie Extraction
+
+```go
+// Configuration
+{
+    Url:                   "/api/users",
+    Method:                "GET",
+    IdentityFieldName:     stringPtr("sessionId"),
+    IdentityFieldLocation: stringPtr("cookie"),
+}
+
+// Request with cookie: Cookie: sessionId=user-123
+// Extracted identifier: "user-123" (transformed to "user_123")
+```
+
+#### JWT Cookie Extraction
+
+```go
+// Configuration
+{
+    Url:                   "/api/protected",
+    Method:                "GET",
+    IdentityFieldName:     stringPtr("[technique=jwt]authToken[pick=sub]"),
+    IdentityFieldLocation: stringPtr("cookie"),
+}
+
+// Request with cookie: Cookie: authToken=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+// Extracted identifier: Value of "sub" claim from JWT
+```
+
+#### Cookie with Prefix Format
+
+```go
+// Configuration
+{
+    Url:                   "/api/session",
+    Method:                "GET",
+    IdentityFieldName:     stringPtr("cookie.authToken"),
+    IdentityFieldLocation: stringPtr("cookie"),
+}
+
+// Request with cookie: Cookie: authToken=token-value
+// Extracted identifier: "token-value" (transformed to "token_value")
+```
+
+### Behavior
+
+- **Cookie Parsing**: Cookies are parsed from the `Cookie` header (case-insensitive header name)
+- **Value Transformation**: Cookie values are transformed using `TransformToLedgerId()` to ensure valid ledger ID format
+- **JWT Decoding**: JWT cookies are decoded without signature verification (unverified) to extract claims
+- **Error Handling**: Returns empty identifier if cookie is missing, invalid, or JWT decoding fails
+
+### Technical Details
+
+- **Cookie Header Support**: Handles both `Cookie` and `cookie` header names
+- **Multiple Cookies**: Correctly parses cookies from multi-cookie header strings
+- **Value Handling**: Properly handles cookie values that contain `=` characters
+- **Case-Insensitive**: Cookie name matching is case-insensitive for better compatibility
+
+### Testing
+
+Added comprehensive test coverage:
+- 22 test cases for `GetUserPrefix()` covering all cookie extraction scenarios
+- 8 test cases for `GetCookieValue()` helper function
+- 9 test cases for `ParseJwtCookieField()` helper function
+
+### Migration Guide
+
+No migration required. This is a new feature that doesn't affect existing functionality. To use cookie extraction:
+
+1. Update your API configuration in UsageFlow dashboard to use `"cookie"` as `identityFieldLocation`
+2. Set `identityFieldName` to either:
+   - Cookie name (e.g., `"sessionId"`)
+   - Cookie name with prefix (e.g., `"cookie.sessionId"`)
+   - JWT cookie format (e.g., `"[technique=jwt]sessionToken[pick=userId]"`)
+
+### Benefits
+
+- **Session-Based Identification**: Easily identify users from session cookies
+- **JWT Cookie Support**: Extract user information from JWT tokens stored in cookies
+- **Flexible Configuration**: Multiple ways to specify cookie extraction (direct name, prefix format, JWT format)
+- **Robust Parsing**: Handles edge cases like multiple cookies, case variations, and special characters
+
+---
+
+## v2.2.0
 
 ### Major Simplification: Server-Driven Configuration
 

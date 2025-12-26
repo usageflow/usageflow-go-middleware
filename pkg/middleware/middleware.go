@@ -674,6 +674,40 @@ func (u *UsageFlowAPI) GetUserPrefix(c *gin.Context, method, url string) (string
 					}
 				}
 			}
+		case "cookie":
+			// Handle JWT cookie format: '[technique=jwt]cookieName[pick=claim]'
+			jwtCookieInfo := ParseJwtCookieField(*cfg.IdentityFieldName)
+			if jwtCookieInfo != nil {
+				cookieValue := GetCookieValue(c, jwtCookieInfo.CookieName)
+				if cookieValue != "" {
+					claims, err := DecodeJWTUnverified(cookieValue)
+					if err == nil {
+						if val, ok := claims[jwtCookieInfo.Claim]; ok {
+							if strVal, ok := val.(string); ok {
+								identifier = strVal
+								break
+							}
+						}
+					}
+				}
+				break
+			}
+
+			// Handle standard cookie access (e.g., "cookie.session" or "session")
+			var cookieValue string
+			fieldName := strings.ToLower(*cfg.IdentityFieldName)
+			if strings.HasPrefix(fieldName, "cookie.") {
+				// Remove "cookie." prefix
+				cookieName := (*cfg.IdentityFieldName)[7:]
+				cookieValue = GetCookieValue(c, cookieName)
+			} else {
+				// Use the field name directly as cookie name
+				cookieValue = GetCookieValue(c, *cfg.IdentityFieldName)
+			}
+
+			if cookieValue != "" {
+				identifier = cookieValue
+			}
 		}
 
 		// If we found an identifier, break out of the loop
