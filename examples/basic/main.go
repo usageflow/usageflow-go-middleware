@@ -2,6 +2,7 @@ package main
 
 import (
 	"log"
+	"os"
 
 	"github.com/gin-gonic/gin"
 	"github.com/usageflow/usageflow-go-middleware/v2/pkg/middleware"
@@ -12,7 +13,7 @@ func main() {
 	r := gin.Default()
 
 	// Initialize UsageFlow middleware
-	uf := middleware.New("eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhY2NvdW50SWQiOiI2OTBjZWJkMzcyMTA1NjBjYzMzYmQwYjciLCJleHAiOjE3NjU5MDU3MTIsImtleUlkIjoiNjkzZGEwYjA0MjAxMzE3NGM3ODE0NGZmIiwicGVybWlzc2lvbnMiOlsiYWxsIl19.zeJo5PS0u-JKgJtnbpSZPRbgZyM8pIWjqA2ZR0qp4ZA")
+	uf := middleware.New(os.Getenv("USAGEFLOW_API_KEY"))
 
 	// Use the middleware
 	r.Use(uf.RequestInterceptor())
