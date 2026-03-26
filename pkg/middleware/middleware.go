@@ -73,10 +73,12 @@ func (u *UsageFlowAPI) RequestInterceptor() gin.HandlerFunc {
 
 		//Capture the time before the request is processed
 		startTime := time.Now()
+		usageflowRequestId := uuid.New().String()
 		c.Set("usageflowStartTime", startTime)
 
 		// Process request with UsageFlow logic
 		metadata := u.collectRequestMetadata(c)
+		metadata["usageflowRequestId"] = usageflowRequestId
 		ledgerId := u.GuessLedgerId(c)
 		userIdentifierSuffix, rateLimited := u.GetUserPrefix(c, method, url)
 
