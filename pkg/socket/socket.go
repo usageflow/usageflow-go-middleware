@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"os"
 	"sync"
 	"time"
 
@@ -58,6 +59,11 @@ func NewUsageFlowSocketManager(apiKey string, poolSize ...int) *UsageFlowSocketM
 		wsURL:       defaultWSURL,
 		poolSize:    size,
 		apiKey:      apiKey,
+	}
+
+	// Tests / local offline mode: skip dialing so suites don't hang on reconnect loops.
+	if os.Getenv("USAGEFLOW_DISABLE_WS") == "1" {
+		return socket
 	}
 
 	socket.Connect()

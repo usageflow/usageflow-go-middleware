@@ -8,16 +8,24 @@ type PolicyListResponse struct {
 type ApplicationConfigResponse struct {
 	MonitorPaths       []interface{} `json:"monitoringPaths"`
 	WhitelistEndpoints []interface{} `json:"whitelistEndpoints"`
+	// DiscoveryDisabled, when true, disables function call-chain tracking (Track/Wrap).
+	// Mirrors JS/Python discoveryDisabled from get_application_config.
+	DiscoveryDisabled *bool `json:"discoveryDisabled,omitempty"`
+	// ReportAllFunctionAllocations controls per-function request_for_allocation / use_allocation.
+	ReportAllFunctionAllocations *bool `json:"reportAllFunctionAllocations,omitempty"`
 }
 
 // ApiConfigStrategy represents the configuration strategy for the API
 // Matches UsageFlowConfig interface: url, method, identityFieldName?, identityFieldLocation?
 type ApiConfigStrategy struct {
-	Url                   string  `bson:"url" json:"url"`
-	Method                string  `bson:"method" json:"method"`
-	IdentityFieldName     *string `bson:"identityFieldName,omitempty" json:"identityFieldName,omitempty"`
-	IdentityFieldLocation *string `bson:"identityFieldLocation,omitempty" json:"identityFieldLocation,omitempty"`
-	HasRateLimit          bool    `bson:"hasRateLimit, default=false" json:"hasRateLimit"`
+	Url                       string  `bson:"url" json:"url"`
+	Method                    string  `bson:"method" json:"method"`
+	Type                      string  `bson:"type,omitempty" json:"type,omitempty"` // API | FUNCTION
+	IdentityFieldName         *string `bson:"identityFieldName,omitempty" json:"identityFieldName,omitempty"`
+	IdentityFieldLocation     *string `bson:"identityFieldLocation,omitempty" json:"identityFieldLocation,omitempty"`
+	HasRateLimit              bool    `bson:"hasRateLimit,omitempty" json:"hasRateLimit,omitempty"`
+	ResponseTrackingField     *string `bson:"responseTrackingField,omitempty" json:"responseTrackingField,omitempty"`
+	IsResponseTrackingEnabled bool    `bson:"isResponseTrackingEnabled,omitempty" json:"isResponseTrackingEnabled,omitempty"`
 }
 
 type BlockedEndpointsResponse struct {
@@ -53,10 +61,10 @@ type PolicyResponse struct {
 	Data PolicyListResponse `json:"data"`
 }
 
-// Route defines an individual route configuration
+// Route defines an individual route configuration (JS/Python camelCase wire shape).
 type Route struct {
-	Method string
-	URL    string
+	Method string `json:"method"`
+	URL    string `json:"url"`
 }
 
 // VerifyResponse represents the response from the verification endpoint

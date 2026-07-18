@@ -62,3 +62,13 @@ type Policy struct {
 type AllocationResponse struct {
 	AllocationID string `json:"allocationId"`
 }
+
+// ReportCallChainPayload is sent after a request with type "report_call_chain".
+// Shape matches JS/Python agents for Console/ledger parity.
+type ReportCallChainPayload struct {
+	Method             string      `json:"method"`
+	URL                string      `json:"url"`
+	CallChain          interface{} `json:"callChain"`
+	Timestamp          string      `json:"timestamp"`
+	UsageflowRequestID string      `json:"usageflowRequestId,omitempty"`
+}

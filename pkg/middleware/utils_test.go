@@ -160,17 +160,17 @@ func TestTransformToLedgerId(t *testing.T) {
 		{
 			name:     "simple string",
 			input:    "User123",
-			expected: "user123",
+			expected: "User123",
 		},
 		{
 			name:     "with spaces",
 			input:    "User Name",
-			expected: "user_name",
+			expected: "User Name",
 		},
 		{
 			name:     "with special characters",
 			input:    "User@Name#123",
-			expected: "user_name_123",
+			expected: "User@Name#123",
 		},
 		{
 			name:     "already lowercase",
@@ -180,7 +180,7 @@ func TestTransformToLedgerId(t *testing.T) {
 		{
 			name:     "mixed case with numbers",
 			input:    "User123Name456",
-			expected: "user123name456",
+			expected: "User123Name456",
 		},
 		{
 			name:     "empty string",

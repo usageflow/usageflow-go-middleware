@@ -1,6 +1,21 @@
 # Release Notes
 
-## v2.3.0 (Latest)
+## v2.5.0 (Latest)
+
+### Go function instrumentation (USA-44)
+
+- **Build-time instrumentation**: `usageflow go build` / `usageflow go test` rewrite eligible functions (`context.Context` or `*gin.Context` first arg) and inject `BeginCall` / `End` hooks.
+- **Call-chain parity**: `report_call_chain` includes `paramsSchema`, `resultSchema`, `usage`, `aiModel`, and `usageflowRequestId`.
+- **Function metering**: discovered functions send `request_for_allocation` / `use_allocation` with `type: FUNCTION_CALL`, including runtime `args` / `returnValue` for Console traces.
+- **HTTP response schemas**: fulfill metadata includes `requestBody`, response `body`, and `responseSchema` (JS/Python parity).
+- **Policy block**: rate-limited `FUNCTION` policies can deny calls for instrumented functions that return `error`.
+
+### Notes
+
+- Prefer `usageflow go build` so function hooks enter the module graph via `-overlay`.
+- File paths in call records are module-relative (e.g. `pkg/web/server.go`) for stable ledger function identity.
+
+## v2.3.0
 
 ### New Features
 
