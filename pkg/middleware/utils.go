@@ -84,12 +84,9 @@ func DecodeJWTUnverified(token string) (map[string]interface{}, error) {
 	return claims, nil
 }
 
-// TransformToLedgerId converts an input string to a valid ledger ID format
+// TransformToLedgerId returns the identity suffix used in ledger aliases.
+// Values are left unchanged so existing ledger IDs remain stable.
 func TransformToLedgerId(input string) string {
-	// TODO: Need to verify this logic.
-	// re := regexp.MustCompile(`[^a-zA-Z0-9]+`)
-	// return re.ReplaceAllString(strings.ToLower(input), "_")
-
 	return input
 }
 

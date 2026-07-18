@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"net/http"
 	"regexp"
 	"strings"
@@ -16,6 +15,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/usageflow/usageflow-go-middleware/v2/pkg/config"
 	"github.com/usageflow/usageflow-go-middleware/v2/pkg/socket"
+	"github.com/usageflow/usageflow-go-middleware/v2/pkg/tracker"
 )
 
 type PolicyMap map[string]*config.ApplicationEndpointPolicy
@@ -34,18 +34,45 @@ type UsageFlowAPI struct {
 	connected                   bool // Tracks socket connection status
 	monitoringPathsMap          map[string]map[string]bool
 	whitelistEndpointsMap       map[string]map[string]bool
+	localWhitelist              []config.Route
+	// reportAllFunctionAllocations meters every discovered function (JS default true).
+	reportAllFunctionAllocations bool
+	// functionPolicies indexes FUNCTION strategies by "METHOD url func:path:name".
+	functionPolicies map[string]config.ApiConfigStrategy
 }
 
 // New creates a new instance of UsageFlowAPI
 func New(apiKey string) *UsageFlowAPI {
 	socketManager := socket.NewUsageFlowSocketManager(apiKey)
 	api := &UsageFlowAPI{
-		policyMap:     make(PolicyMap),
-		socketManager: socketManager,
-		connected:     socketManager.IsConnected(), // Initialize connection status
+		policyMap:                    make(PolicyMap),
+		socketManager:                socketManager,
+		connected:                    socketManager.IsConnected(), // Initialize connection status
+		reportAllFunctionAllocations: true,
+		functionPolicies:             make(map[string]config.ApiConfigStrategy),
 	}
+	api.wireFunctionAllocationCallbacks()
 	api.StartConfigUpdater()
 	return api
+}
+
+// Whitelist adds routes that bypass metering (merged with server whitelist on each config refresh).
+func (u *UsageFlowAPI) Whitelist(routes ...config.Route) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	u.localWhitelist = append(u.localWhitelist, routes...)
+	if u.whitelistEndpointsMap == nil {
+		u.whitelistEndpointsMap = make(map[string]map[string]bool)
+	}
+	for _, route := range routes {
+		if route.Method == "" || route.URL == "" {
+			continue
+		}
+		if _, exists := u.whitelistEndpointsMap[route.Method]; !exists {
+			u.whitelistEndpointsMap[route.Method] = make(map[string]bool)
+		}
+		u.whitelistEndpointsMap[route.Method][route.URL] = true
+	}
 }
 
 // RequestInterceptor creates a Gin middleware for intercepting requests
@@ -54,10 +81,9 @@ func (u *UsageFlowAPI) RequestInterceptor() gin.HandlerFunc {
 		method := c.Request.Method
 		url := GetPatternedURL(c)
 
-		if len(u.monitoringPathsMap) == 0 {
-			c.Next()
-			return
-		}
+		// Establish request-scoped tracking for Track/Wrap (fail soft).
+		trackingStore := u.beginTracking(c, method, url)
+		defer u.finishTracking(c, method, url, trackingStore)
 
 		// Check whitelist
 		if isWhitelisted(method, url, u.whitelistEndpointsMap) {
@@ -65,7 +91,7 @@ func (u *UsageFlowAPI) RequestInterceptor() gin.HandlerFunc {
 			return
 		}
 
-		// Check if route should be monitored
+		// JS/Python parity: empty monitoringPaths => monitor all routes.
 		if !isRouteMonitored(method, url, u.monitoringPathsMap) {
 			c.Next()
 			return
@@ -75,6 +101,7 @@ func (u *UsageFlowAPI) RequestInterceptor() gin.HandlerFunc {
 		startTime := time.Now()
 		usageflowRequestId := uuid.New().String()
 		c.Set("usageflowStartTime", startTime)
+		tracker.SetUsageflowRequestID(c.Request.Context(), usageflowRequestId)
 
 		// Process request with UsageFlow logic
 		metadata := u.collectRequestMetadata(c)
@@ -87,6 +114,9 @@ func (u *UsageFlowAPI) RequestInterceptor() gin.HandlerFunc {
 		}
 
 		success, err := u.ExecuteRequestWithMetadata(ledgerId, method, url, metadata, c, rateLimited)
+		if field := u.lookupAPIResponseTrackingField(method, url); field != "" {
+			c.Set("responseTrackingField", field)
+		}
 		if err != nil {
 			// If socket is not connected, continue normally instead of aborting
 			u.mu.RLock()
@@ -118,19 +148,78 @@ func (u *UsageFlowAPI) RequestInterceptor() gin.HandlerFunc {
 			return
 		}
 
-		// Process the original request
+		// Process the original request (capture body for responseSchema / metering).
+		blw := attachBodyCapture(c)
 		c.Next()
 
 		// After the request is processed, execute the fulfill request
 		metadata["responseStatusCode"] = c.Writer.Status()
 
-		// Store the request duration in milliseconds
+		responseTrackingField := ""
+		if field, ok := c.Get("responseTrackingField"); ok {
+			if s, ok := field.(string); ok {
+				responseTrackingField = s
+			}
+		}
+		amount := enrichFulfillMetadataWithResponse(metadata, blw, responseTrackingField)
+		c.Set("usageflowAmount", amount)
 
 		if _, err := u.ExecuteFulfillRequestWithMetadata(ledgerId, method, url, metadata, c); err != nil {
-			// Log the error but don't abort since the main request has already been processed
-			fmt.Printf("Failed to fulfill request: %v\n", err)
+			// Fail soft after the handler already completed.
+			_ = err
 		}
 	}
+}
+
+// beginTracking attaches a per-request tracking context when discovery is enabled.
+func (u *UsageFlowAPI) beginTracking(c *gin.Context, method, url string) *tracker.TrackingContext {
+	defer func() {
+		_ = recover()
+	}()
+	if !tracker.IsEnabled() {
+		return nil
+	}
+	ctx, store := tracker.WithTracking(c.Request.Context(), &tracker.RequestContext{
+		Method: method,
+		URL:    url,
+	}, "")
+	c.Request = c.Request.WithContext(ctx)
+	return store
+}
+
+// finishTracking sends report_call_chain after the handler (fail soft).
+func (u *UsageFlowAPI) finishTracking(c *gin.Context, method, url string, store *tracker.TrackingContext) {
+	defer func() {
+		_ = recover()
+	}()
+	if store == nil || !tracker.IsEnabled() {
+		return
+	}
+	callChain := store.Snapshot()
+	if len(callChain) == 0 {
+		return
+	}
+	u.reportCallChain(method, url, store.RequestID(), callChain)
+}
+
+// reportCallChain sends the call chain over the WebSocket when connected.
+func (u *UsageFlowAPI) reportCallChain(method, url, usageflowRequestID string, callChain []tracker.FunctionCallRecord) {
+	defer func() {
+		_ = recover()
+	}()
+	if len(callChain) == 0 || !u.isConnected() {
+		return
+	}
+	_ = u.socketManager.Send(&socket.UsageFlowSocketMessage{
+		Type: "report_call_chain",
+		Payload: &socket.ReportCallChainPayload{
+			Method:             method,
+			URL:                url,
+			CallChain:          callChain,
+			Timestamp:          time.Now().UTC().Format(time.RFC3339),
+			UsageflowRequestID: usageflowRequestID,
+		},
+	})
 }
 
 func (u *UsageFlowAPI) FetchApiConfig() ([]config.ApiConfigStrategy, error) {
@@ -173,6 +262,7 @@ func (u *UsageFlowAPI) FetchApiConfig() ([]config.ApiConfigStrategy, error) {
 	u.mu.Lock()
 	u.ApiConfig = policyList.Policies
 	u.mu.Unlock()
+	u.syncFunctionPolicies(policyList.Policies)
 
 	return policyList.Policies, nil
 }
@@ -207,10 +297,12 @@ func (u *UsageFlowAPI) FetchApplicationConfig() (config.ApplicationConfigRespons
 	u.mu.Lock()
 	whitelistEndpoints, err := ConvertToType[[]config.Route](applicationConfigResponse.WhitelistEndpoints)
 	if err != nil {
+		u.mu.Unlock()
 		return applicationConfigResponse, fmt.Errorf("failed to convert whitelist endpoints: %v", err)
 	}
 	monitorPaths, err := ConvertToType[[]config.Route](applicationConfigResponse.MonitorPaths)
 	if err != nil {
+		u.mu.Unlock()
 		return applicationConfigResponse, fmt.Errorf("failed to convert monitor paths: %v", err)
 	}
 
@@ -222,6 +314,9 @@ func (u *UsageFlowAPI) FetchApplicationConfig() (config.ApplicationConfigRespons
 
 	populateMap := func(targetMap map[string]map[string]bool, routes []config.Route) {
 		for _, route := range routes {
+			if route.Method == "" || route.URL == "" {
+				continue
+			}
 			if _, exists := targetMap[route.Method]; !exists {
 				targetMap[route.Method] = make(map[string]bool)
 			}
@@ -231,11 +326,25 @@ func (u *UsageFlowAPI) FetchApplicationConfig() (config.ApplicationConfigRespons
 
 	populateMap(routesMap, u.MonitoringPaths)
 	populateMap(whiteListRoutesMap, u.WhitelistEndpoints)
+	populateMap(whiteListRoutesMap, u.localWhitelist)
 
 	u.monitoringPathsMap = routesMap
 	u.whitelistEndpointsMap = whiteListRoutesMap
 
+	if applicationConfigResponse.ReportAllFunctionAllocations != nil {
+		u.reportAllFunctionAllocations = *applicationConfigResponse.ReportAllFunctionAllocations
+	} else {
+		u.reportAllFunctionAllocations = true
+	}
+
 	u.mu.Unlock()
+
+	// Honor server discoveryDisabled (JS/Python parity). Env USAGEFLOW_DISCOVERY_DISABLED also disables.
+	if applicationConfigResponse.DiscoveryDisabled != nil {
+		tracker.SetEnabled(!*applicationConfigResponse.DiscoveryDisabled)
+	} else {
+		tracker.Enable()
+	}
 
 	return applicationConfigResponse, nil
 }
@@ -417,6 +526,15 @@ func (u *UsageFlowAPI) ExecuteRequestWithMetadata(ledgerId, method, url string, 
 	c.Set("eventId", allocationId)
 	c.Set("rateLimited", rateLimited)
 
+	// Propagate HTTP allocation context so function-level metering can correlate.
+	if store := tracker.FromContext(c.Request.Context()); store != nil {
+		metaCopy := make(map[string]interface{}, len(metadata))
+		for k, v := range metadata {
+			metaCopy[k] = v
+		}
+		store.SetRequestAllocation(allocationId, ledgerId, metaCopy)
+	}
+
 	return true, nil
 }
 
@@ -434,6 +552,12 @@ func (u *UsageFlowAPI) isConnected() bool {
 	connected := u.connected
 	u.mu.RUnlock()
 	return connected
+}
+
+// IsConnected reports whether at least one UsageFlow WebSocket connection is active.
+// It is safe to use for health checks and local integration demos.
+func (u *UsageFlowAPI) IsConnected() bool {
+	return u.isConnected()
 }
 
 // ExecuteFulfillRequestWithMetadata executes the fulfill request after the main request is processed
@@ -469,6 +593,11 @@ func (u *UsageFlowAPI) ExecuteFulfillRequestWithMetadata(ledgerId, method, url s
 	}
 
 	amount := float64(1)
+	if v, ok := c.Get("usageflowAmount"); ok {
+		if n, ok := v.(float64); ok {
+			amount = n
+		}
+	}
 
 	success, err := u.useAllocationRequest(ledgerId, &amount, allocationId.(string), metadata, isRateLimited)
 	if err != nil {
@@ -538,13 +667,11 @@ func (u *UsageFlowAPI) collectRequestMetadata(c *gin.Context) map[string]interfa
 	metadata["queryParams"] = queryParams
 
 	if params := c.Params; len(params) > 0 {
-		if params := c.Params; len(params) > 0 {
-			paramsMap := make(map[string]string)
-			for _, param := range params {
-				paramsMap[param.Key] = param.Value
-			}
-			metadata["pathParams"] = paramsMap
+		paramsMap := make(map[string]string)
+		for _, param := range params {
+			paramsMap[param.Key] = param.Value
 		}
+		metadata["pathParams"] = paramsMap
 	}
 
 	// Collect request body if present
@@ -552,15 +679,14 @@ func (u *UsageFlowAPI) collectRequestMetadata(c *gin.Context) map[string]interfa
 		bodyBytes, err := io.ReadAll(c.Request.Body)
 		if err == nil {
 			// Restore the body for further processing
-			c.Request.Body = ioutil.NopCloser(bytes.NewBuffer(bodyBytes))
+			c.Request.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
 
-			// Try to parse as JSON
-			var bodyJSON map[string]interface{}
+			// Try to parse as JSON — store as requestBody (Console expects body = response).
+			var bodyJSON interface{}
 			if err := json.Unmarshal(bodyBytes, &bodyJSON); err == nil {
-				metadata["body"] = bodyJSON
+				metadata["requestBody"] = bodyJSON
 			} else {
-				// Store as string if not JSON
-				metadata["body"] = string(bodyBytes)
+				metadata["requestBody"] = string(bodyBytes)
 			}
 		}
 	}
@@ -597,6 +723,11 @@ func isWhitelisted(method, url string, whiteListMap map[string]map[string]bool) 
 }
 
 func isRouteMonitored(method, url string, routesMap map[string]map[string]bool) bool {
+	// JS/Python parity: when monitoringPaths is empty, monitor every route.
+	if len(routesMap) == 0 {
+		return true
+	}
+
 	// Check exact method match
 	if methodRoutes, exists := routesMap[method]; exists {
 		if methodRoutes[url] || methodRoutes["*"] {
@@ -664,7 +795,7 @@ func (u *UsageFlowAPI) GetUserPrefix(c *gin.Context, method, url string) (string
 			}
 			// Restore the body for further processing
 			if body, err := GetRequestBody(c); err == nil {
-				c.Request.Body = ioutil.NopCloser(bytes.NewBufferString(body))
+				c.Request.Body = io.NopCloser(bytes.NewBufferString(body))
 			}
 		case "bearer_token":
 			if token, err := ExtractBearerToken(c); err == nil {

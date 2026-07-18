@@ -89,7 +89,7 @@ func TestUsageFlowAPI_GetUserPrefix(t *testing.T) {
 			setup: func(c *gin.Context) {
 				c.Request.Header.Set("userId", "user-123")
 			},
-			expected:    "user_123",
+			expected:    "user-123",
 			rateLimited: false,
 			description: "Should extract identifier from header",
 		},
@@ -108,7 +108,7 @@ func TestUsageFlowAPI_GetUserPrefix(t *testing.T) {
 			setup: func(c *gin.Context) {
 				c.Request.Header.Set("x-user-id", "user-456")
 			},
-			expected:    "user_456",
+			expected:    "user-456",
 			rateLimited: false,
 			description: "Should extract identifier from header (case insensitive)",
 		},
@@ -129,7 +129,7 @@ func TestUsageFlowAPI_GetUserPrefix(t *testing.T) {
 			setup: func(c *gin.Context) {
 				c.Request.URL.RawQuery = "orderId=order-789"
 			},
-			expected:    "order_789",
+			expected:    "order-789",
 			rateLimited: false,
 			description: "Should extract identifier from query parameter",
 		},
@@ -148,7 +148,7 @@ func TestUsageFlowAPI_GetUserPrefix(t *testing.T) {
 			setup: func(c *gin.Context) {
 				c.Request.URL.RawQuery = "sessionId=session-abc"
 			},
-			expected:    "session_abc",
+			expected:    "session-abc",
 			rateLimited: false,
 			description: "Should extract identifier from query_params (same as query)",
 		},
@@ -169,7 +169,7 @@ func TestUsageFlowAPI_GetUserPrefix(t *testing.T) {
 			setup: func(c *gin.Context) {
 				c.Params = gin.Params{gin.Param{Key: "userId", Value: "user-999"}}
 			},
-			expected:    "user_999",
+			expected:    "user-999",
 			rateLimited: false,
 			description: "Should extract identifier from path parameter",
 		},
@@ -192,7 +192,7 @@ func TestUsageFlowAPI_GetUserPrefix(t *testing.T) {
 				c.Request = httptest.NewRequest("POST", "/api/create", bytes.NewBufferString(body))
 				c.Request.Header.Set("Content-Type", "application/json")
 			},
-			expected:    "test_example_com",
+			expected:    "test@example.com",
 			rateLimited: false,
 			description: "Should extract identifier from request body JSON",
 		},
@@ -235,7 +235,7 @@ func TestUsageFlowAPI_GetUserPrefix(t *testing.T) {
 				jwtToken := createTestJWT(`{"userId":"jwt-user-123","email":"jwt@example.com"}`)
 				c.Request.Header.Set("Authorization", "Bearer "+jwtToken)
 			},
-			expected:    "jwt_user_123",
+			expected:    "jwt-user-123",
 			rateLimited: false,
 			description: "Should extract identifier from JWT bearer token claim",
 		},
@@ -255,7 +255,7 @@ func TestUsageFlowAPI_GetUserPrefix(t *testing.T) {
 				jwtToken := createTestJWT(`{"sub":"sub-123","email":"test@example.com"}`)
 				c.Request.Header.Set("Authorization", "Bearer "+jwtToken)
 			},
-			expected:    "sub_123",
+			expected:    "sub-123",
 			rateLimited: false,
 			description: "Should extract sub claim from JWT bearer token",
 		},
@@ -276,7 +276,7 @@ func TestUsageFlowAPI_GetUserPrefix(t *testing.T) {
 			setup: func(c *gin.Context) {
 				c.Request.Header.Set("Cookie", "sessionId=session-123; other=value")
 			},
-			expected:    "session_123",
+			expected:    "session-123",
 			rateLimited: false,
 			description: "Should extract identifier from standard cookie",
 		},
@@ -295,7 +295,7 @@ func TestUsageFlowAPI_GetUserPrefix(t *testing.T) {
 			setup: func(c *gin.Context) {
 				c.Request.Header.Set("Cookie", "authToken=token-456; sessionId=session-123")
 			},
-			expected:    "token_456",
+			expected:    "token-456",
 			rateLimited: false,
 			description: "Should extract identifier from cookie with cookie. prefix",
 		},
@@ -314,7 +314,7 @@ func TestUsageFlowAPI_GetUserPrefix(t *testing.T) {
 			setup: func(c *gin.Context) {
 				c.Request.Header.Set("Cookie", "sessionid=session-789")
 			},
-			expected:    "session_789",
+			expected:    "session-789",
 			rateLimited: false,
 			description: "Should extract identifier from cookie (case insensitive)",
 		},
@@ -336,7 +336,7 @@ func TestUsageFlowAPI_GetUserPrefix(t *testing.T) {
 				jwtToken := createTestJWT(`{"userId":"cookie-jwt-user-123","email":"cookie@example.com"}`)
 				c.Request.Header.Set("Cookie", "sessionToken="+jwtToken)
 			},
-			expected:    "cookie_jwt_user_123",
+			expected:    "cookie-jwt-user-123",
 			rateLimited: false,
 			description: "Should extract identifier from JWT cookie with claim extraction",
 		},
@@ -356,7 +356,7 @@ func TestUsageFlowAPI_GetUserPrefix(t *testing.T) {
 				jwtToken := createTestJWT(`{"sub":"cookie-sub-456","email":"test@example.com"}`)
 				c.Request.Header.Set("Cookie", "authToken="+jwtToken+"; other=value")
 			},
-			expected:    "cookie_sub_456",
+			expected:    "cookie-sub-456",
 			rateLimited: false,
 			description: "Should extract sub claim from JWT cookie",
 		},
@@ -397,7 +397,7 @@ func TestUsageFlowAPI_GetUserPrefix(t *testing.T) {
 			setup: func(c *gin.Context) {
 				c.Request.Header.Set("userId", "limited-user")
 			},
-			expected:    "limited_user",
+			expected:    "limited-user",
 			rateLimited: true,
 			description: "Should set rateLimited flag when HasRateLimit is true",
 		},
@@ -634,6 +634,13 @@ func TestIsRouteMonitored(t *testing.T) {
 				"GET": {"/api/users": true},
 			},
 			expected: false,
+		},
+		{
+			name:     "empty map monitors all (JS/Python parity)",
+			method:   "POST",
+			url:      "/api/chat",
+			routes:   map[string]map[string]bool{},
+			expected: true,
 		},
 	}
 
