@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"bytes"
+	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
@@ -650,6 +651,30 @@ func TestIsRouteMonitored(t *testing.T) {
 			assert.Equal(t, tt.expected, result)
 		})
 	}
+}
+
+func TestForceMonitorAll_IgnoresRemoteMonitoringPaths(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	api := New("test-api-key")
+	defer api.socketManager.Close()
+	api.ForceMonitorAll()
+	api.monitoringPathsMap = map[string]map[string]bool{
+		"POST": {"/api/chat": true},
+	}
+
+	r := gin.New()
+	r.Use(api.RequestInterceptor())
+	r.GET("/api/v1/accounts", func(c *gin.Context) {
+		_, ok := c.Get("usageflowStartTime")
+		assert.True(t, ok, "ForceMonitorAll should meter routes outside monitoringPaths")
+		c.Status(http.StatusOK)
+	})
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/accounts", nil)
+	r.ServeHTTP(w, req)
+	assert.Equal(t, http.StatusOK, w.Code)
 }
 
 func TestUsageFlowAPI_ExecuteRequestWithMetadata(t *testing.T) {

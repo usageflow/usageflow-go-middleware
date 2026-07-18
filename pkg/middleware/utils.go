@@ -16,22 +16,21 @@ var (
 	once sync.Once
 )
 
-// StartConfigUpdater begins periodic updates of the API configuration
+// StartConfigUpdater begins periodic updates of the API configuration.
+// Fetches run sequentially on one goroutine so WebSocket writes are not raced.
 func (u *UsageFlowAPI) StartConfigUpdater() {
 	once.Do(func() {
-		// Immediately fetch config
-		go u.FetchApiConfig()
-		go u.FetchBlockedEndpoints()
-		go u.FetchApplicationConfig()
-		// Start periodic updates every 30 seconds
 		go func() {
+			fetchAll := func() {
+				_, _ = u.FetchApiConfig()
+				_ = u.FetchBlockedEndpoints()
+				_, _ = u.FetchApplicationConfig()
+			}
+			fetchAll()
 			ticker := time.NewTicker(30 * time.Second)
 			defer ticker.Stop()
-
 			for range ticker.C {
-				u.FetchApiConfig()
-				u.FetchBlockedEndpoints()
-				u.FetchApplicationConfig()
+				fetchAll()
 			}
 		}()
 	})

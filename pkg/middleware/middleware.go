@@ -37,6 +37,8 @@ type UsageFlowAPI struct {
 	localWhitelist              []config.Route
 	// reportAllFunctionAllocations meters every discovered function (JS default true).
 	reportAllFunctionAllocations bool
+	// forceMonitorAll ignores remote monitoringPaths and meters every non-whitelisted route.
+	forceMonitorAll bool
 	// functionPolicies indexes FUNCTION strategies by "METHOD url func:path:name".
 	functionPolicies map[string]config.ApiConfigStrategy
 }
@@ -75,6 +77,15 @@ func (u *UsageFlowAPI) Whitelist(routes ...config.Route) {
 	}
 }
 
+// ForceMonitorAll meters every non-whitelisted HTTP route even when the Console
+// application has a narrower monitoringPaths list (useful when dogfooding a
+// second service under an existing API key).
+func (u *UsageFlowAPI) ForceMonitorAll() {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	u.forceMonitorAll = true
+}
+
 // RequestInterceptor creates a Gin middleware for intercepting requests
 func (u *UsageFlowAPI) RequestInterceptor() gin.HandlerFunc {
 	return func(c *gin.Context) {
@@ -92,7 +103,12 @@ func (u *UsageFlowAPI) RequestInterceptor() gin.HandlerFunc {
 		}
 
 		// JS/Python parity: empty monitoringPaths => monitor all routes.
-		if !isRouteMonitored(method, url, u.monitoringPathsMap) {
+		// ForceMonitorAll ignores remote monitoringPaths entirely.
+		u.mu.RLock()
+		forceAll := u.forceMonitorAll
+		paths := u.monitoringPathsMap
+		u.mu.RUnlock()
+		if !forceAll && !isRouteMonitored(method, url, paths) {
 			c.Next()
 			return
 		}

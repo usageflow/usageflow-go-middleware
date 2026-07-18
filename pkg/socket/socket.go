@@ -363,7 +363,8 @@ func (m *UsageFlowSocketManager) reconnectConnectionWithRetry(index int, attempt
 	m.mu.Unlock()
 }
 
-// pingConnection sends periodic ping messages to keep the connection alive
+// pingConnection sends periodic ping messages to keep the connection alive.
+// Writes must hold conn.mu — gorilla/websocket forbids concurrent writers.
 func (m *UsageFlowSocketManager) pingConnection(conn *PooledConnection) {
 	ticker := time.NewTicker(pingPeriod)
 	defer ticker.Stop()
@@ -374,18 +375,14 @@ func (m *UsageFlowSocketManager) pingConnection(conn *PooledConnection) {
 			conn.mu.Unlock()
 			return
 		}
-		ws := conn.ws
-		conn.mu.Unlock()
-
-		// Send ping with write deadline
-		ws.SetWriteDeadline(time.Now().Add(writeWait))
-		if err := ws.WriteMessage(websocket.PingMessage, nil); err != nil {
-			// Ping failed, connection is dead
-			conn.mu.Lock()
+		conn.ws.SetWriteDeadline(time.Now().Add(writeWait))
+		err := conn.ws.WriteMessage(websocket.PingMessage, nil)
+		if err != nil {
 			conn.connected = false
 			conn.mu.Unlock()
 			return
 		}
+		conn.mu.Unlock()
 	}
 }
 

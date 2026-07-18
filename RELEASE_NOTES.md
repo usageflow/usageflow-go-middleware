@@ -1,6 +1,14 @@
 # Release Notes
 
-## v2.5.0 (Latest)
+## v2.5.1 (Latest)
+
+### Fixes
+
+- **WebSocket write race**: ping messages now hold the connection write lock (avoids `concurrent write to websocket connection` panics that silently drop metering).
+- **Config fetch serialization**: application config / policies / blocked endpoints refresh on one goroutine instead of three parallel `SendAsync` calls.
+- **`ForceMonitorAll()`**: dogfood / multi-service setups can meter every non-whitelisted route even when Console `monitoringPaths` only lists another app's routes.
+
+## v2.5.0
 
 ### Go function instrumentation (USA-44)
 
