@@ -402,6 +402,64 @@ func TestUsageFlowAPI_GetUserPrefix(t *testing.T) {
 			rateLimited: true,
 			description: "Should set rateLimited flag when HasRateLimit is true",
 		},
+		{
+			name:   "rate limited without identity",
+			method: "GET",
+			url:    "/api/limited",
+			config: []config.ApiConfigStrategy{
+				{
+					Url:          "/api/limited",
+					Method:       "GET",
+					HasRateLimit: true,
+				},
+			},
+			setup:       func(c *gin.Context) {},
+			expected:    "",
+			rateLimited: true,
+			description: "Should keep rateLimited when HasRateLimit is true even without identity",
+		},
+		{
+			name:   "rate limited missing identity value",
+			method: "GET",
+			url:    "/api/limited",
+			config: []config.ApiConfigStrategy{
+				{
+					Url:                   "/api/limited",
+					Method:                "GET",
+					IdentityFieldName:     stringPtr("userId"),
+					IdentityFieldLocation: stringPtr("headers"),
+					HasRateLimit:          true,
+				},
+			},
+			setup:       func(c *gin.Context) {},
+			expected:    "",
+			rateLimited: true,
+			description: "Should keep rateLimited when identity header is missing",
+		},
+		{
+			name:   "unrelated hasRateLimit does not apply",
+			method: "GET",
+			url:    "/api/open",
+			config: []config.ApiConfigStrategy{
+				{
+					Url:          "/api/limited",
+					Method:       "GET",
+					HasRateLimit: true,
+				},
+				{
+					Url:                   "/api/open",
+					Method:                "GET",
+					IdentityFieldName:     stringPtr("userId"),
+					IdentityFieldLocation: stringPtr("headers"),
+				},
+			},
+			setup: func(c *gin.Context) {
+				c.Request.Header.Set("userId", "open-user")
+			},
+			expected:    "open-user",
+			rateLimited: false,
+			description: "HasRateLimit on another route must not force rateLimited",
+		},
 
 		// Edge cases
 		{
@@ -414,6 +472,7 @@ func TestUsageFlowAPI_GetUserPrefix(t *testing.T) {
 					Method:                "GET",
 					IdentityFieldName:     stringPtr("userId"),
 					IdentityFieldLocation: stringPtr("headers"),
+					HasRateLimit:          true,
 				},
 			},
 			setup:       func(c *gin.Context) {},

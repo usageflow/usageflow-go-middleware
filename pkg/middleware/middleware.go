@@ -148,7 +148,7 @@ func (u *UsageFlowAPI) RequestInterceptor() gin.HandlerFunc {
 				return
 			}
 
-			c.AbortWithStatusJSON(402, gin.H{"error": "insufficient_resources", "message": "UsageFlow blocked this request because the user has no remaining resources."})
+			c.AbortWithStatusJSON(429, gin.H{"error": "rate_limit_exceeded", "message": "UsageFlow blocked this request because the rate limit or quota was exceeded."})
 			return
 		}
 		if !success {
@@ -469,8 +469,16 @@ func (u *UsageFlowAPI) allocateRequest(ledgerId string, amount *float64, metadat
 		return "", nil
 	}
 
-	if response.Error != "" {
-		return "", fmt.Errorf("failed to allocate request: %s", response.Error)
+	// Match function metering: server may deny via error field and/or type:"error".
+	if response.Error != "" || strings.EqualFold(response.Type, "error") {
+		msg := response.Error
+		if msg == "" {
+			msg = response.Message
+		}
+		if msg == "" {
+			msg = "allocation denied"
+		}
+		return "", fmt.Errorf("failed to allocate request: %s", msg)
 	}
 
 	// The response payload is a map[string]interface{} with "allocationId" key
@@ -773,16 +781,17 @@ func (u *UsageFlowAPI) GetUserPrefix(c *gin.Context, method, url string) (string
 
 	var identifier string
 	var rateLimited bool
+	var matched bool
 
 	// Find matching config for current method and url
 	for _, cfg := range config {
-		if cfg.HasRateLimit {
-			rateLimited = true
-		}
-
 		// Check if this config matches the current method and url
 		if cfg.Method != method || cfg.Url != url {
 			continue
+		}
+		matched = true
+		if cfg.HasRateLimit {
+			rateLimited = true
 		}
 
 		// Skip if identity fields are not configured
@@ -865,9 +874,15 @@ func (u *UsageFlowAPI) GetUserPrefix(c *gin.Context, method, url string) (string
 		}
 	}
 
+	if !matched {
+		return "", false
+	}
+
+	// Keep rateLimited even when identity is missing so hasRateLimit policies
+	// still wait on allocation and can return 429 instead of fire-and-forget.
 	if identifier != "" {
 		return TransformToLedgerId(identifier), rateLimited
 	}
 
-	return "", false
+	return "", rateLimited
 }
