@@ -1,171 +1,149 @@
 # UsageFlow Go Middleware
 
-[![Go Reference](https://pkg.go.dev/badge/github.com/usageflow/usageflow-go-middleware.svg)](https://pkg.go.dev/github.com/usageflow/usageflow-go-middleware)
-[![Go Report Card](https://goreportcard.com/badge/github.com/usageflow/usageflow-go-middleware.svg)](https://goreportcard.com/report/github.com/usageflow/usageflow-go-middleware)
+[![Go Reference](https://pkg.go.dev/badge/github.com/usageflow/usageflow-go-middleware/v2.svg)](https://pkg.go.dev/github.com/usageflow/usageflow-go-middleware/v2)
 
-> ⚠️ **Beta Notice**: This package is currently in beta for experimentation. While we strive to maintain stability, breaking changes may occur as we refine the API and features. We recommend testing thoroughly in development environments before deploying to production.
+The recommended UsageFlow agent for Gin applications. It meters selected HTTP
+routes, applies UsageFlow policies, and sends request traces to the
+[UsageFlow Console](https://console.usageflow.io).
 
-A Go middleware package for integrating UsageFlow with Gin: HTTP metering plus **automatic function call-chain instrumentation** (same `report_call_chain` wire format as the JS and Python agents).
+## Prerequisites
 
-## Installation
+- Go 1.23.1 or newer
+- A Gin application
+- A UsageFlow application API key
+
+## Install
 
 ```bash
 go get github.com/usageflow/usageflow-go-middleware/v2
-go install github.com/usageflow/usageflow-go-middleware/v2/cmd/usageflow@latest
+export USAGEFLOW_API_KEY=uf_live_replace_me
 ```
 
-## Quick Start
-
-### 1. Add Gin middleware (runtime)
+## Add the middleware
 
 ```go
 package main
 
 import (
-    "context"
+	"log"
+	"os"
 
-    "github.com/gin-gonic/gin"
-    ufmiddleware "github.com/usageflow/usageflow-go-middleware/v2/pkg/middleware"
+	"github.com/gin-gonic/gin"
+	ufmiddleware "github.com/usageflow/usageflow-go-middleware/v2/pkg/middleware"
 )
 
-func listUsers(ctx context.Context) ([]string, error) {
-    return []string{"user1", "user2"}, nil
-}
-
 func main() {
-    r := gin.Default()
-    uf := ufmiddleware.New("your-api-key")
-    r.Use(uf.RequestInterceptor())
+	apiKey := os.Getenv("USAGEFLOW_API_KEY")
+	if apiKey == "" {
+		log.Fatal("USAGEFLOW_API_KEY is required")
+	}
 
-    r.GET("/api/users", func(c *gin.Context) {
-        users, _ := listUsers(c.Request.Context())
-        c.JSON(200, gin.H{"users": users})
-    })
-    r.Run(":8080")
+	router := gin.Default()
+	usageflow := ufmiddleware.New(apiKey)
+	router.Use(usageflow.RequestInterceptor())
+
+	router.GET("/api/users/:id", func(c *gin.Context) {
+		c.JSON(200, gin.H{"id": c.Param("id")})
+	})
+
+	log.Fatal(router.Run(":8080"))
 }
 ```
 
-No `Track` / `Wrap` in application code. Pass `c.Request.Context()` into services (normal Go style) so functions correlate to the HTTP request.
+Create one middleware instance during application startup and register it before
+your routes. `New` opens and maintains the UsageFlow connection and starts
+configuration refreshes. The package currently has no public shutdown method.
 
-### 2. Build with UsageFlow (compile-time)
+## Choose routes in the Console
 
-JS/Python agents patch modules at runtime. Go is statically compiled, so instrumentation is injected at **build** time:
+In the [UsageFlow Console](https://console.usageflow.io), open the application
+that owns your API key and configure:
 
-```bash
-usageflow go build -o server .
-# or
-usageflow go test ./...
-```
+- `monitoringPaths`: routes to meter and trace
+- `whitelistEndpoints`: routes to bypass, such as health checks
 
-Under the hood this rewrites eligible sources via Go’s `-overlay` mechanism (so new imports participate in the module graph) and instruments functions in your module that take `context.Context` or `*gin.Context` as their first parameter.
+The agent reads this configuration at startup and refreshes it every **30
+seconds**. An empty `monitoringPaths` list means monitor every non-whitelisted
+route.
 
-After each request, middleware sends `report_call_chain` with `method`, `url`, `usageflowRequestId`, and the recorded functions.
+Matching uses Gin route patterns such as `/api/users/:id`. A `*` matches the
+entire method or entire URL field only:
 
-### Disable discovery
+- `{"method":"*","url":"/health"}` matches `/health` for every method.
+- `{"method":"GET","url":"*"}` matches every GET route.
+- `{"method":"*","url":"*"}` matches every route.
+- `/api/*` is treated literally; it is not a prefix glob.
 
-- Server: `discoveryDisabled` on `get_application_config`
-- Client: `USAGEFLOW_DISCOVERY_DISABLED=true`
+Whitelist matching happens before monitoring.
 
-## JS / Python vs Go
+## Verify the integration
 
-| | JS / Python | Go |
-|---|---|---|
-| How functions are found | Runtime import / `require` hooks | Compile-time rewrite (`usageflow go build`) |
-| User wraps each function? | No | No (when using the CLI) |
-| Request correlation | ALS / contextvars | `context.Context` on the request + call chain |
-| Report message | `report_call_chain` | `report_call_chain` (same shape) |
-| Per-call schemas | `paramsSchema` / `resultSchema` | Same fields on each call record |
-| Function metering | `request_for_allocation` / `use_allocation` with `type: FUNCTION_CALL` | Same; respects `reportAllFunctionAllocations` + `FUNCTION` policies |
-| Block on function | Rate-limited `FUNCTION` policy via async allocate | Same for instrumented funcs that return `error` |
-
-Each call record can include `paramsSchema`, `resultSchema`, optional LLM `usage` / `aiModel`, and `usageflowRequestId`. Function policies from `get_application_policies` with `type: "FUNCTION"` use identity `func:<filePath>:<funcName>` (same key shape as JS). When `hasRateLimit` is true and allocation is denied, instrumented functions that return `error` abort with a policy error.
-
-**v1 scope:** functions whose first argument is `context.Context` or `*gin.Context`, in your main module. Calls that drop context (or start goroutines without it) may not appear until later propagation work.
-
-## Configuration
-
-Monitor / whitelist routes are loaded from the UsageFlow server via the WebSocket (`get_application_config`). Initialize with your API key:
-
-```go
-uf := ufmiddleware.New("your-api-key")
-r.Use(uf.RequestInterceptor())
-```
-
-## Advanced: manual Track / Wrap
-
-If a function cannot be auto-instrumented, you can opt in:
-
-```go
-import "github.com/usageflow/usageflow-go-middleware/v2/pkg/tracker"
-
-result, err := tracker.Track(ctx, tracker.Options{
-    FuncName: "specialCase",
-    FilePath: "svc/special.go",
-}, func() (T, error) { return special(ctx) })
-```
-
-Prefer `usageflow go build` for normal application code.
-
-## Example
-
-Run the example locally without an API key:
+Start the app, then make a request:
 
 ```bash
-./examples/basic/run-local.sh
+curl -i http://localhost:8080/api/users/123
 ```
 
-Then open:
+Open the application's Traces view in the Console and verify a trace appears for
+`GET /api/users/:id`. Allow up to 30 seconds after changing route configuration.
 
-```text
-http://127.0.0.1:8080/api/go/instrumentation-demo
-```
+## Optional function visibility
 
-The JSON response includes `callChain` with the automatically instrumented
-`listUsers` function. To additionally send the chain to UsageFlow, export
-`USAGEFLOW_API_KEY` before running the script.
-
-### Live chat UI
-
-The [`examples/chat`](examples/chat) app provides a browser chat UI backed by
-Gin and the live UsageFlow WebSocket:
+HTTP route tracing works with the middleware above. To also show eligible
+application functions in a trace, install the CLI and build with it:
 
 ```bash
-cd examples/chat
-cp .env.example .env
-# Add your UsageFlow application key to .env
-./run-live.sh
+go install github.com/usageflow/usageflow-go-middleware/v2/cmd/usageflow@latest
+usageflow go build ./...
 ```
 
-Open `http://127.0.0.1:8081`. Each chat message executes several automatically
-instrumented Go functions, displays the local call chain, and sends it to
-UsageFlow as `report_call_chain`.
+Pass `context.Context` from the Gin request into service functions. Function
+visibility currently covers functions in your module whose first parameter is
+`context.Context` or `*gin.Context`.
 
-## Release Process
+## Runtime behavior
 
-This package uses GitHub Actions to create releases when changes are pushed to `main`.
+- A disconnected UsageFlow service does not stop your handler; metering is
+  skipped until connectivity returns.
+- A configured blocked-endpoint policy returns HTTP `403` with
+  `error: "endpoint_blocked"`.
+- A rate-limit or quota denial returns HTTP `429` with
+  `error: "rate_limit_exceeded"`.
+- An unexpected connected allocation failure returns HTTP `400` with
+  `error: "Request allocation failed"`.
+- The agent captures method, Gin route pattern, raw path, client IP, user agent,
+  query and path parameters, request body, response status, duration, and
+  response body.
+- `Authorization` values and headers named `x-...key` are masked. Other headers
+  are included. Response capture is limited to 512 KiB; long non-JSON response
+  text is summarized rather than retained.
 
-## Documentation
+Review the captured data and configure routes narrowly for production. Do not
+put API keys in source control.
 
-For detailed documentation, see [docs.usageflow.io](https://docs.usageflow.io).
+## Troubleshooting
 
-## Security
+- **No trace:** confirm `USAGEFLOW_API_KEY`, application selection, and that the
+  Gin route pattern is monitored and not whitelisted.
+- **Config change not visible:** wait at least 30 seconds and send a new request.
+- **Dynamic route mismatch:** configure Gin's pattern (`/users/:id`), not a
+  concrete path (`/users/123`).
+- **App works but UsageFlow is absent:** check outbound WebSocket access to
+  `wss://api.usageflow.io/ws`.
+- **Functions absent:** build with `usageflow go build` and propagate the request
+  context into eligible functions.
 
-### Known Vulnerabilities
+## Migrating from the legacy package
 
-This package currently uses `golang.org/x/net v0.25.0` which has a known vulnerability:
-- **GO-2025-3595**: Incorrect Neutralization of Input During Web Page Generation in x/net
-  - **Severity**: Critical
-  - **Fixed in**: `golang.org/x/net v0.38.0` (requires Go 1.24.0+)
+If you use `github.com/usageflow/usageflow-gin`, switch the module import to
+`github.com/usageflow/usageflow-go-middleware/v2`, change
+`RequestInterceptor(routes, whitelist)` to `RequestInterceptor()`, and move
+route configuration to the Console. The legacy repository is currently
+unavailable remotely, so no link is included here.
 
-### Go Version Requirements
+- Repository: [github.com/usageflow/usageflow-go-middleware](https://github.com/usageflow/usageflow-go-middleware)
+- Package reference: [pkg.go.dev/github.com/usageflow/usageflow-go-middleware/v2](https://pkg.go.dev/github.com/usageflow/usageflow-go-middleware/v2)
 
-- **Minimum**: Go 1.23.1
-- **Recommended**: Go 1.24.0+
-
-## Release Notes
-
-See [RELEASE_NOTES.md](RELEASE_NOTES.md).
-
-## License
+Before releasing documentation changes, complete [RELEASE_CHECKLIST.md](RELEASE_CHECKLIST.md).
 
 MIT — see [LICENSE](LICENSE).

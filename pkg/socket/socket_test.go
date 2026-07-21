@@ -29,6 +29,14 @@ func TestNewUsageFlowSocketManager_CustomPoolSize(t *testing.T) {
 	manager.Close()
 }
 
+func TestNewUsageFlowSocketManager_CapsPoolSize(t *testing.T) {
+	manager := NewUsageFlowSocketManager("test-api-key", 50)
+	assert.NotNil(t, manager)
+	assert.Equal(t, maxPoolSize, manager.poolSize)
+
+	manager.Close()
+}
+
 func TestUsageFlowSocketManager_IsConnected(t *testing.T) {
 	manager := NewUsageFlowSocketManager("test-api-key")
 	defer manager.Close()
@@ -240,7 +248,8 @@ func TestUsageFlowSocketManager_Destroy(t *testing.T) {
 }
 
 func TestConstants(t *testing.T) {
-	assert.Equal(t, 10, defaultPoolSize)
+	assert.Equal(t, 5, defaultPoolSize)
+	assert.Equal(t, 5, maxPoolSize)
 	assert.Equal(t, 5*time.Second, reconnectDelay)
 	assert.Equal(t, 2*time.Second, requestTimeout)
 	assert.Equal(t, 30*time.Second, pingPeriod)
