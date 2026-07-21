@@ -27,10 +27,11 @@ type RequestForAllocation struct {
 
 // UseAllocationRequest represents the payload for using an allocation
 type UseAllocationRequest struct {
-	Alias        string                 `json:"alias"`
-	Amount       float64                `json:"amount"`
-	AllocationID string                 `json:"allocationId"`
-	Metadata     map[string]interface{} `json:"metadata,omitempty"`
+	Alias               string                 `json:"alias"`
+	Amount              float64                `json:"amount"`
+	AllocationID        string                 `json:"allocationId"`
+	WaitForConfirmation bool                   `json:"waitForConfirmation,omitempty"`
+	Metadata            map[string]interface{} `json:"metadata,omitempty"`
 }
 
 // PolicyResponse represents the response for get_application_policies
