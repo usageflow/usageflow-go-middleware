@@ -91,6 +91,48 @@ uf := ufmiddleware.New("your-api-key")
 r.Use(uf.RequestInterceptor())
 ```
 
+### Production rate-limit enforcement with Gin
+
+Register `RequestInterceptor` before registering routes. Gin must know the matched route pattern (for example, `/users/:id`), and the UsageFlow policy method and URL must exactly match that pattern.
+
+For routes that must be rate limited, fetch and validate policies synchronously before the server starts accepting traffic. `New` also starts a background configuration updater, but background fetch errors do not stop the application:
+
+```go
+uf := ufmiddleware.New(os.Getenv("USAGEFLOW_API_KEY"))
+
+policies, err := uf.FetchApiConfig()
+if err != nil {
+    log.Fatalf("UsageFlow policies unavailable: %v", err)
+}
+
+requiredMethod := http.MethodPost
+requiredURL := "/api/v1/discover"
+found := false
+for _, policy := range policies {
+    if policy.Method == requiredMethod && policy.Url == requiredURL && policy.HasRateLimit {
+        found = true
+        break
+    }
+}
+if !found {
+    log.Fatalf("required UsageFlow rate limit is not configured for %s %s", requiredMethod, requiredURL)
+}
+
+r.Use(uf.RequestInterceptor()) // before r.POST, r.GET, groups, and other routes
+r.POST(requiredURL, discoverHandler)
+```
+
+If the policy identity comes from a proxy header, explicitly forward that header and prevent clients from reaching the Gin port directly. For Cloudflare behind Nginx:
+
+```nginx
+proxy_set_header Cf-Connecting-Ip $http_cf_connecting_ip;
+proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+```
+
+Configure Gin trusted proxies with `SetTrustedProxies`; do not trust every proxy in production. Test the deployed path—not only the handler—with more requests than the configured limit and assert that the handler is not invoked after an HTTP `429`.
+
+The current middleware deliberately fails open when its UsageFlow WebSocket is disconnected, times out, or returns an unexpected allocation response. If the endpoint must remain protected during a UsageFlow outage, keep a local rate limiter as a fallback until fail-closed behavior is enabled in the middleware.
+
 ## Advanced: manual Track / Wrap
 
 If a function cannot be auto-instrumented, you can opt in:
