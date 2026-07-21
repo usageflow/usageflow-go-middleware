@@ -16,7 +16,8 @@ import (
 
 const (
 	defaultWSURL      = "wss://api.usageflow.io/ws"
-	defaultPoolSize   = 10
+	defaultPoolSize   = 5
+	maxPoolSize       = 5
 	reconnectDelay    = 5 * time.Second
 	requestTimeout    = 2 * time.Second
 	pingPeriod        = 30 * time.Second
@@ -52,6 +53,9 @@ func NewUsageFlowSocketManager(apiKey string, poolSize ...int) *UsageFlowSocketM
 	size := defaultPoolSize
 	if len(poolSize) > 0 && poolSize[0] > 0 {
 		size = poolSize[0]
+	}
+	if size > maxPoolSize {
+		size = maxPoolSize
 	}
 
 	socket := &UsageFlowSocketManager{
