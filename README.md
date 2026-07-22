@@ -131,7 +131,7 @@ proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
 
 Configure Gin trusted proxies with `SetTrustedProxies`; do not trust every proxy in production. Test the deployed path—not only the handler—with more requests than the configured limit and assert that the handler is not invoked after an HTTP `429`.
 
-Routes with `hasRateLimit: true` fail closed when allocation or confirmed settlement cannot be authorized, so Gin does not invoke the handler. Non-rate-limited metering remains fail-open. A local limiter is still recommended as an independent outage fallback.
+Routes with `hasRateLimit: true` fail closed on **explicit quota/policy denials**. If the UsageFlow WebSocket is down or a transport timeout occurs, the middleware **fails open** so the customer API stays up; rate limiting resumes after reconnect. A local limiter is still recommended as an independent abuse fallback.
 
 ## Advanced: manual Track / Wrap
 

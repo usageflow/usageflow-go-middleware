@@ -248,6 +248,13 @@ func (u *UsageFlowAPI) lookupFunctionPolicyLocked(store *tracker.TrackingContext
 			return policy, true
 		}
 	}
+	// Console stores FUNCTION identity as name (+ location), not file path.
+	nameSuffix := ":" + funcName
+	for k, policy := range u.functionPolicies {
+		if strings.HasSuffix(k, nameSuffix) {
+			return policy, true
+		}
+	}
 	return config.ApiConfigStrategy{}, false
 }
 

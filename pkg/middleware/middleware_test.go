@@ -386,6 +386,35 @@ func TestUsageFlowAPI_GetUserPrefix(t *testing.T) {
 
 		// Rate limiting
 		{
+			name:   "FUNCTION hasRateLimit must not force HTTP rateLimited",
+			method: "POST",
+			url:    "/api/v1/discover",
+			config: []config.ApiConfigStrategy{
+				{
+					Type:                  "FUNCTION",
+					Method:                "POST",
+					Url:                   "/api/v1/discover",
+					HasRateLimit:          true,
+					IdentityFieldName:     stringPtr("DiscoverHandler"),
+					IdentityFieldLocation: stringPtr("headers"),
+				},
+				{
+					Type:                  "API",
+					Method:                "POST",
+					Url:                   "/api/v1/discover",
+					HasRateLimit:          false,
+					IdentityFieldName:     stringPtr("Cf-Connecting-Ip"),
+					IdentityFieldLocation: stringPtr("headers"),
+				},
+			},
+			setup: func(c *gin.Context) {
+				c.Request.Header.Set("Cf-Connecting-Ip", "84.95.96.36")
+			},
+			expected:    "84.95.96.36",
+			rateLimited: false,
+			description: "Function policies share method+url but must not enable HTTP sync rate limiting",
+		},
+		{
 			name:   "rate limited flag",
 			method: "GET",
 			url:    "/api/limited",
@@ -818,14 +847,14 @@ func TestUsageFlowAPI_ExecuteRequestWithMetadata(t *testing.T) {
 	assert.NoError(t, err)
 	assert.True(t, success)
 
-	// A route with a configured rate limit must fail closed when authorization
-	// cannot be obtained.
+	// Rate-limited routes also fail open when UsageFlow is unavailable so
+	// customer APIs are not taken down by an agent outage.
 	success, err = api.ExecuteRequestWithMetadata("ledger-id", "GET", "/api/users", metadata, c, true)
-	assert.ErrorContains(t, err, "rate-limit authorization unavailable")
-	assert.False(t, success)
+	assert.NoError(t, err)
+	assert.True(t, success)
 }
 
-func TestRequestInterceptor_RateLimitedRouteFailsClosedWhenSocketUnavailable(t *testing.T) {
+func TestRequestInterceptor_RateLimitedRouteFailsOpenWhenSocketUnavailable(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	api := New("test-api-key")
@@ -852,9 +881,8 @@ func TestRequestInterceptor_RateLimitedRouteFailsClosedWhenSocketUnavailable(t *
 	req.Header.Set("Content-Type", "application/json")
 	r.ServeHTTP(w, req)
 
-	assert.Equal(t, http.StatusTooManyRequests, w.Code)
-	assert.False(t, handlerCalled)
-	assert.JSONEq(t, `{"error":"rate_limit_exceeded","message":"UsageFlow could not authorize this rate-limited request."}`, w.Body.String())
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.True(t, handlerCalled)
 }
 
 func TestRequestInterceptor_RateLimitedRouteSettlesBeforeHandler(t *testing.T) {

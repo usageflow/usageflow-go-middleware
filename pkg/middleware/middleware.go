@@ -151,11 +151,15 @@ func (u *UsageFlowAPI) RequestInterceptor() gin.HandlerFunc {
 				return
 			}
 
-			// A configured rate limit must fail closed. Otherwise a WebSocket
-			// timeout can let the handler return 2xx while UsageFlow later
-			// records a quota denial.
-			if rateLimited {
+			// Real quota/policy denials fail closed. UsageFlow outages
+			// (disconnected socket / transport errors) fail open so customer
+			// APIs stay up; rate limits resume when the agent reconnects.
+			if rateLimited && !isUsageFlowAvailabilityError(err) {
 				c.AbortWithStatusJSON(429, gin.H{"error": "rate_limit_exceeded", "message": "UsageFlow could not authorize this rate-limited request."})
+				return
+			}
+			if rateLimited {
+				c.Next()
 				return
 			}
 
@@ -444,11 +448,9 @@ func (u *UsageFlowAPI) allocateRequest(ledgerId string, amount *float64, metadat
 	// Check if socket is connected (this updates the status)
 	connected := u.isConnected()
 
-	// Rate-limited requests must not reach the handler without authorization.
+	// Availability outage: never take down the customer API. Metering and
+	// rate limits resume when the WebSocket reconnects.
 	if !connected {
-		if rateLimited {
-			return "", fmt.Errorf("rate-limit authorization unavailable: WebSocket not connected")
-		}
 		return "", nil
 	}
 
@@ -490,7 +492,8 @@ func (u *UsageFlowAPI) allocateRequest(ledgerId string, amount *float64, metadat
 		u.mu.Lock()
 		u.connected = false
 		u.mu.Unlock()
-		return "", fmt.Errorf("rate-limit authorization failed: %w", err)
+		// Transport failure = UsageFlow unavailable → fail open.
+		return "", nil
 	}
 
 	// Match function metering: server may deny via error field and/or type:"error".
@@ -523,11 +526,8 @@ func (u *UsageFlowAPI) useAllocationRequest(ledgerId string, amount *float64, al
 	// Check if socket is connected
 	connected := u.isConnected()
 
-	// Rate-limited requests must settle before the handler is authorized.
+	// Availability outage: allow the request through.
 	if !connected {
-		if rateLimited {
-			return false, fmt.Errorf("rate-limit settlement unavailable: WebSocket not connected")
-		}
 		return true, nil
 	}
 
@@ -559,7 +559,8 @@ func (u *UsageFlowAPI) useAllocationRequest(ledgerId string, amount *float64, al
 			u.mu.Lock()
 			u.connected = false
 			u.mu.Unlock()
-			return false, fmt.Errorf("rate-limit settlement failed: %w", err)
+			// Transport failure = UsageFlow unavailable → fail open.
+			return true, nil
 		}
 		if response.Error != "" || strings.EqualFold(response.Type, "error") {
 			msg := response.Error
@@ -581,6 +582,27 @@ func (u *UsageFlowAPI) useAllocationRequest(ledgerId string, amount *float64, al
 	})
 
 	return true, nil
+}
+
+// isUsageFlowAvailabilityError reports transport/outage failures where the
+// customer API should stay up. Explicit quota/policy denials return false.
+func isUsageFlowAvailabilityError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	switch {
+	case strings.Contains(msg, "websocket not connected"),
+		strings.Contains(msg, "authorization unavailable"),
+		strings.Contains(msg, "settlement unavailable"),
+		strings.Contains(msg, "authorization failed"),
+		strings.Contains(msg, "settlement failed"),
+		strings.Contains(msg, "request timeout"),
+		strings.Contains(msg, "i/o timeout"):
+		return true
+	default:
+		return false
+	}
 }
 
 // ExecuteRequestWithMetadata executes the initial allocation request
@@ -847,8 +869,14 @@ func (u *UsageFlowAPI) GetUserPrefix(c *gin.Context, method, url string) (string
 	var rateLimited bool
 	var matched bool
 
-	// Find matching config for current method and url
+	// Find matching config for current method and url.
+	// FUNCTION policies share method+url with the parent route but must not
+	// drive HTTP identity/rate-limit — that made endpoint requests fail-closed
+	// whenever a function policy had hasRateLimit (USA-62 / Fivicon).
 	for _, cfg := range config {
+		if strings.EqualFold(cfg.Type, "FUNCTION") {
+			continue
+		}
 		// Check if this config matches the current method and url
 		if cfg.Method != method || cfg.Url != url {
 			continue
