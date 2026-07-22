@@ -1,6 +1,12 @@
 # Release Notes
 
-## v2.5.4 (Latest)
+## v2.5.5 (Latest)
+
+### Fixes
+
+- **Gin FUNCTION rate limits**: instrumented `*gin.Context` handlers now `AbortWithStatusJSON(429)` when a FUNCTION policy denies allocation. Previously the block error was discarded (handlers have no `error` return), so function rate limits never stopped HTTP requests.
+
+## v2.5.4
 
 ### Fixes
 
