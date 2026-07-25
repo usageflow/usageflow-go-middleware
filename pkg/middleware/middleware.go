@@ -45,6 +45,8 @@ type UsageFlowAPI struct {
 	localWhitelist              []config.Route
 	// reportAllFunctionAllocations meters every discovered function (JS default true).
 	reportAllFunctionAllocations bool
+	// accountReachLimit stops metering when the UsageFlow plan period cap is hit.
+	accountReachLimit bool
 	// forceMonitorAll ignores remote monitoringPaths and meters every non-whitelisted route.
 	forceMonitorAll bool
 	// functionPolicies indexes FUNCTION strategies by "METHOD url func:path:name".
@@ -109,10 +111,17 @@ func (u *UsageFlowAPI) RequestInterceptor() gin.HandlerFunc {
 		u.mu.RLock()
 		whitelisted := isWhitelisted(method, url, u.whitelistEndpointsMap)
 		forceAll := u.forceMonitorAll
+		reachLimit := u.accountReachLimit
 		monitored := isRouteMonitored(method, url, u.monitoringPathsMap)
 		u.mu.RUnlock()
 
 		if whitelisted {
+			c.Next()
+			return
+		}
+
+		// Plan cap: stop metering, fail soft for the customer app.
+		if reachLimit {
 			c.Next()
 			return
 		}
@@ -338,7 +347,9 @@ func (u *UsageFlowAPI) FetchApplicationConfig() (config.ApplicationConfigRespons
 	}
 
 	// Honor server discoveryDisabled (JS/Python parity). Env USAGEFLOW_DISCOVERY_DISABLED also disables.
-	if applicationConfigResponse.DiscoveryDisabled != nil {
+	if applicationConfigResponse.AccountReachLimit {
+		tracker.SetEnabled(false)
+	} else if applicationConfigResponse.DiscoveryDisabled != nil {
 		tracker.SetEnabled(!*applicationConfigResponse.DiscoveryDisabled)
 	} else {
 		tracker.Enable()
@@ -371,6 +382,7 @@ func (u *UsageFlowAPI) applyRouteConfig(applicationConfigResponse config.Applica
 	} else {
 		u.reportAllFunctionAllocations = true
 	}
+	u.accountReachLimit = applicationConfigResponse.AccountReachLimit
 
 	return nil
 }

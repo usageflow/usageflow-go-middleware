@@ -1,10 +1,5 @@
 package config
 
-type PolicyListResponse struct {
-	Policies []ApiConfigStrategy `json:"policies"`
-	Total    int                 `json:"total"`
-}
-
 type ApplicationConfigResponse struct {
 	MonitorPaths       []interface{} `json:"monitoringPaths"`
 	WhitelistEndpoints []interface{} `json:"whitelistEndpoints"`
@@ -13,6 +8,8 @@ type ApplicationConfigResponse struct {
 	DiscoveryDisabled *bool `json:"discoveryDisabled,omitempty"`
 	// ReportAllFunctionAllocations controls per-function request_for_allocation / use_allocation.
 	ReportAllFunctionAllocations *bool `json:"reportAllFunctionAllocations,omitempty"`
+	// AccountReachLimit is true when the account hit its plan request cap.
+	AccountReachLimit bool `json:"accountReachLimit"`
 }
 
 // ApiConfigStrategy represents the configuration strategy for the API
@@ -29,8 +26,15 @@ type ApiConfigStrategy struct {
 }
 
 type BlockedEndpointsResponse struct {
-	Endpoints []BlockedEndpoints `bson:"endpoints" json:"endpoints"`
-	Total     int                `bson:"total" json:"total"`
+	Endpoints         []BlockedEndpoints `bson:"endpoints" json:"endpoints"`
+	Total             int                `bson:"total" json:"total"`
+	AccountReachLimit bool               `json:"accountReachLimit"`
+}
+
+type PolicyListResponse struct {
+	Policies          []ApiConfigStrategy `json:"policies"`
+	Total             int                 `json:"total"`
+	AccountReachLimit bool                `json:"accountReachLimit"`
 }
 
 type BlockedEndpoints struct {
