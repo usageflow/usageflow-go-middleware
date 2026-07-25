@@ -926,7 +926,8 @@ func (u *UsageFlowAPI) GetUserPrefix(c *gin.Context, method, url string) (string
 			if body, err := GetRequestBody(c); err == nil {
 				c.Request.Body = io.NopCloser(bytes.NewBufferString(body))
 			}
-		case "bearer_token":
+		// Console strategies historically used "jwt" / "bearer"; agents use "bearer_token".
+		case "bearer_token", "bearer", "jwt":
 			if token, err := ExtractBearerToken(c); err == nil {
 				if claims, err := DecodeJWTUnverified(token); err == nil {
 					if val, ok := claims[*cfg.IdentityFieldName]; ok {

@@ -244,6 +244,46 @@ func TestUsageFlowAPI_GetUserPrefix(t *testing.T) {
 			description: "Should extract identifier from JWT bearer token claim",
 		},
 		{
+			name:   "extract from Console jwt location alias (email claim)",
+			method: "GET",
+			url:    "/api/protected",
+			config: []config.ApiConfigStrategy{
+				{
+					Url:                   "/api/protected",
+					Method:                "GET",
+					IdentityFieldName:     stringPtr("email"),
+					IdentityFieldLocation: stringPtr("jwt"),
+				},
+			},
+			setup: func(c *gin.Context) {
+				jwtToken := createTestJWT(`{"userId":"jwt-user-123","email":"jwt@example.com"}`)
+				c.Request.Header.Set("Authorization", "Bearer "+jwtToken)
+			},
+			expected:    "jwt@example.com",
+			rateLimited: false,
+			description: "Should accept Console 'jwt' alias for bearer_token claim extraction",
+		},
+		{
+			name:   "extract from Console bearer location alias",
+			method: "GET",
+			url:    "/api/protected",
+			config: []config.ApiConfigStrategy{
+				{
+					Url:                   "/api/protected",
+					Method:                "GET",
+					IdentityFieldName:     stringPtr("email"),
+					IdentityFieldLocation: stringPtr("bearer"),
+				},
+			},
+			setup: func(c *gin.Context) {
+				jwtToken := createTestJWT(`{"email":"alias@example.com"}`)
+				c.Request.Header.Set("Authorization", "Bearer "+jwtToken)
+			},
+			expected:    "alias@example.com",
+			rateLimited: false,
+			description: "Should accept Console 'bearer' alias for bearer_token claim extraction",
+		},
+		{
 			name:   "extract from bearer_token with sub claim",
 			method: "GET",
 			url:    "/api/protected",
