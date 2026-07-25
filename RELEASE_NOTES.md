@@ -1,6 +1,12 @@
 # Release Notes
 
-## v2.5.6 (Latest)
+## v2.5.7 (Latest)
+
+### Fixes
+
+- **Bearer JWT identity (USA-66)**: `guessLedgerId` / identity extraction now accepts Console location aliases `jwt` and `bearer` in addition to `bearer_token`, so JWT claim strategies (e.g. `email`) contribute to ledger IDs the same way header identity does.
+
+## v2.5.6
 
 ### Fixes
 
