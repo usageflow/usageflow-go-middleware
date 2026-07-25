@@ -74,6 +74,12 @@ func Handle(c *gin.Context) {
 	if !strings.Contains(s, "c.Request.Context()") {
 		t.Fatalf("expected gin context extraction:\n%s", s)
 	}
+	if !strings.Contains(s, "AbortWithStatusJSON") {
+		t.Fatalf("expected gin abort on function policy block:\n%s", s)
+	}
+	if !strings.Contains(s, "429") {
+		t.Fatalf("expected HTTP 429 on function policy block:\n%s", s)
+	}
 }
 
 func TestRewriteFile_Idempotent(t *testing.T) {

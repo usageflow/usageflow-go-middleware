@@ -6,20 +6,15 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
 )
 
-var (
-	once sync.Once
-)
-
 // StartConfigUpdater begins periodic updates of the API configuration.
 // Fetches run sequentially on one goroutine so WebSocket writes are not raced.
 func (u *UsageFlowAPI) StartConfigUpdater() {
-	once.Do(func() {
+	u.updaterOnce.Do(func() {
 		go func() {
 			fetchAll := func() {
 				_, _ = u.FetchApiConfig()

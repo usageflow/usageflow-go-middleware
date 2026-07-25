@@ -20,6 +20,13 @@ import (
 
 type PolicyMap map[string]*config.ApplicationEndpointPolicy
 
+type socketManager interface {
+	Send(*socket.UsageFlowSocketMessage) error
+	SendAsync(*socket.UsageFlowSocketMessage) (*socket.UsageFlowSocketResponse, error)
+	IsConnected() bool
+	Close()
+}
+
 type UsageFlowAPI struct {
 	APIKey                      string                     `json:"apiKey"`
 	ApplicationId               string                     `json:"applicationId"`
@@ -30,13 +37,16 @@ type UsageFlowAPI struct {
 	MonitoringPaths             []config.Route             `json:"monitoringPaths"`
 	policyMap                   PolicyMap
 	mu                          sync.RWMutex
-	socketManager               *socket.UsageFlowSocketManager
+	updaterOnce                 sync.Once
+	socketManager               socketManager
 	connected                   bool // Tracks socket connection status
 	monitoringPathsMap          map[string]map[string]bool
 	whitelistEndpointsMap       map[string]map[string]bool
 	localWhitelist              []config.Route
 	// reportAllFunctionAllocations meters every discovered function (JS default true).
 	reportAllFunctionAllocations bool
+	// accountReachLimit stops metering when the UsageFlow plan period cap is hit.
+	accountReachLimit bool
 	// forceMonitorAll ignores remote monitoringPaths and meters every non-whitelisted route.
 	forceMonitorAll bool
 	// functionPolicies indexes FUNCTION strategies by "METHOD url func:path:name".
@@ -96,19 +106,29 @@ func (u *UsageFlowAPI) RequestInterceptor() gin.HandlerFunc {
 		trackingStore := u.beginTracking(c, method, url)
 		defer u.finishTracking(c, method, url, trackingStore)
 
-		// Check whitelist
-		if isWhitelisted(method, url, u.whitelistEndpointsMap) {
+		// Route maps are replaced during config refreshes and may also be updated
+		// by Whitelist, so evaluate both decisions under the same read lock.
+		u.mu.RLock()
+		whitelisted := isWhitelisted(method, url, u.whitelistEndpointsMap)
+		forceAll := u.forceMonitorAll
+		reachLimit := u.accountReachLimit
+		monitored := isRouteMonitored(method, url, u.monitoringPathsMap)
+		u.mu.RUnlock()
+
+		if whitelisted {
+			c.Next()
+			return
+		}
+
+		// Plan cap: stop metering, fail soft for the customer app.
+		if reachLimit {
 			c.Next()
 			return
 		}
 
 		// JS/Python parity: empty monitoringPaths => monitor all routes.
 		// ForceMonitorAll ignores remote monitoringPaths entirely.
-		u.mu.RLock()
-		forceAll := u.forceMonitorAll
-		paths := u.monitoringPathsMap
-		u.mu.RUnlock()
-		if !forceAll && !isRouteMonitored(method, url, paths) {
+		if !forceAll && !monitored {
 			c.Next()
 			return
 		}
@@ -134,17 +154,30 @@ func (u *UsageFlowAPI) RequestInterceptor() gin.HandlerFunc {
 			c.Set("responseTrackingField", field)
 		}
 		if err != nil {
-			// If socket is not connected, continue normally instead of aborting
+			errorMessage := err.Error()
+			if errorMessage == "endpoints is blocked" {
+				c.AbortWithStatusJSON(403, gin.H{"error": "endpoint_blocked", "message": "UsageFlow blocked this endpoint by policy rule."})
+				return
+			}
+
+			// Real quota/policy denials fail closed. UsageFlow outages
+			// (disconnected socket / transport errors) fail open so customer
+			// APIs stay up; rate limits resume when the agent reconnects.
+			if rateLimited && !isUsageFlowAvailabilityError(err) {
+				c.AbortWithStatusJSON(429, gin.H{"error": "rate_limit_exceeded", "message": "UsageFlow could not authorize this rate-limited request."})
+				return
+			}
+			if rateLimited {
+				c.Next()
+				return
+			}
+
+			// Non-rate-limited metering remains fail-open.
 			u.mu.RLock()
 			connected := u.connected
 			u.mu.RUnlock()
 			if !connected {
 				c.Next()
-				return
-			}
-			errorMessage := err.Error()
-			if errorMessage == "endpoints is blocked" {
-				c.AbortWithStatusJSON(403, gin.H{"error": "endpoint_blocked", "message": "UsageFlow blocked this endpoint by policy rule."})
 				return
 			}
 
@@ -309,60 +342,65 @@ func (u *UsageFlowAPI) FetchApplicationConfig() (config.ApplicationConfigRespons
 		return applicationConfigResponse, fmt.Errorf("failed to unmarshal application config: %v", err)
 	}
 
-	// Update ApiConfig with lock
-	u.mu.Lock()
-	whitelistEndpoints, err := ConvertToType[[]config.Route](applicationConfigResponse.WhitelistEndpoints)
-	if err != nil {
-		u.mu.Unlock()
-		return applicationConfigResponse, fmt.Errorf("failed to convert whitelist endpoints: %v", err)
+	if err := u.applyRouteConfig(applicationConfigResponse); err != nil {
+		return applicationConfigResponse, err
 	}
-	monitorPaths, err := ConvertToType[[]config.Route](applicationConfigResponse.MonitorPaths)
-	if err != nil {
-		u.mu.Unlock()
-		return applicationConfigResponse, fmt.Errorf("failed to convert monitor paths: %v", err)
-	}
-
-	u.WhitelistEndpoints = whitelistEndpoints
-	u.MonitoringPaths = monitorPaths
-
-	routesMap := make(map[string]map[string]bool)
-	whiteListRoutesMap := make(map[string]map[string]bool)
-
-	populateMap := func(targetMap map[string]map[string]bool, routes []config.Route) {
-		for _, route := range routes {
-			if route.Method == "" || route.URL == "" {
-				continue
-			}
-			if _, exists := targetMap[route.Method]; !exists {
-				targetMap[route.Method] = make(map[string]bool)
-			}
-			targetMap[route.Method][route.URL] = true
-		}
-	}
-
-	populateMap(routesMap, u.MonitoringPaths)
-	populateMap(whiteListRoutesMap, u.WhitelistEndpoints)
-	populateMap(whiteListRoutesMap, u.localWhitelist)
-
-	u.monitoringPathsMap = routesMap
-	u.whitelistEndpointsMap = whiteListRoutesMap
-
-	if applicationConfigResponse.ReportAllFunctionAllocations != nil {
-		u.reportAllFunctionAllocations = *applicationConfigResponse.ReportAllFunctionAllocations
-	} else {
-		u.reportAllFunctionAllocations = true
-	}
-
-	u.mu.Unlock()
 
 	// Honor server discoveryDisabled (JS/Python parity). Env USAGEFLOW_DISCOVERY_DISABLED also disables.
-	if applicationConfigResponse.DiscoveryDisabled != nil {
+	if applicationConfigResponse.AccountReachLimit {
+		tracker.SetEnabled(false)
+	} else if applicationConfigResponse.DiscoveryDisabled != nil {
 		tracker.SetEnabled(!*applicationConfigResponse.DiscoveryDisabled)
 	} else {
 		tracker.Enable()
 	}
 
 	return applicationConfigResponse, nil
+}
+
+func (u *UsageFlowAPI) applyRouteConfig(applicationConfigResponse config.ApplicationConfigResponse) error {
+	whitelistEndpoints, err := ConvertToType[[]config.Route](applicationConfigResponse.WhitelistEndpoints)
+	if err != nil {
+		return fmt.Errorf("failed to convert whitelist endpoints: %v", err)
+	}
+	monitorPaths, err := ConvertToType[[]config.Route](applicationConfigResponse.MonitorPaths)
+	if err != nil {
+		return fmt.Errorf("failed to convert monitor paths: %v", err)
+	}
+
+	u.mu.Lock()
+	defer u.mu.Unlock()
+
+	u.WhitelistEndpoints = whitelistEndpoints
+	u.MonitoringPaths = monitorPaths
+
+	u.monitoringPathsMap = routesToMap(u.MonitoringPaths)
+	u.whitelistEndpointsMap = routesToMap(u.WhitelistEndpoints, u.localWhitelist)
+
+	if applicationConfigResponse.ReportAllFunctionAllocations != nil {
+		u.reportAllFunctionAllocations = *applicationConfigResponse.ReportAllFunctionAllocations
+	} else {
+		u.reportAllFunctionAllocations = true
+	}
+	u.accountReachLimit = applicationConfigResponse.AccountReachLimit
+
+	return nil
+}
+
+func routesToMap(routeSets ...[]config.Route) map[string]map[string]bool {
+	routesMap := make(map[string]map[string]bool)
+	for _, routes := range routeSets {
+		for _, route := range routes {
+			if route.Method == "" || route.URL == "" {
+				continue
+			}
+			if routesMap[route.Method] == nil {
+				routesMap[route.Method] = make(map[string]bool)
+			}
+			routesMap[route.Method][route.URL] = true
+		}
+	}
+	return routesMap
 }
 
 func (u *UsageFlowAPI) FetchBlockedEndpoints() error {
@@ -422,7 +460,8 @@ func (u *UsageFlowAPI) allocateRequest(ledgerId string, amount *float64, metadat
 	// Check if socket is connected (this updates the status)
 	connected := u.isConnected()
 
-	// If not connected, skip and return empty allocation ID (continue normally)
+	// Availability outage: never take down the customer API. Metering and
+	// rate limits resume when the WebSocket reconnects.
 	if !connected {
 		return "", nil
 	}
@@ -465,7 +504,7 @@ func (u *UsageFlowAPI) allocateRequest(ledgerId string, amount *float64, metadat
 		u.mu.Lock()
 		u.connected = false
 		u.mu.Unlock()
-		// Return empty string to continue normally
+		// Transport failure = UsageFlow unavailable → fail open.
 		return "", nil
 	}
 
@@ -484,12 +523,12 @@ func (u *UsageFlowAPI) allocateRequest(ledgerId string, amount *float64, metadat
 	// The response payload is a map[string]interface{} with "allocationId" key
 	payloadMap, ok := response.Payload.(map[string]interface{})
 	if !ok {
-		return "", nil // Continue normally on unexpected response
+		return "", fmt.Errorf("rate-limit authorization returned unexpected payload type %T", response.Payload)
 	}
 
 	allocationId, ok := payloadMap["allocationId"].(string)
-	if !ok {
-		return "", nil // Continue normally if allocationId not found
+	if !ok || allocationId == "" {
+		return "", fmt.Errorf("rate-limit authorization response is missing allocationId")
 	}
 
 	return allocationId, nil
@@ -499,7 +538,7 @@ func (u *UsageFlowAPI) useAllocationRequest(ledgerId string, amount *float64, al
 	// Check if socket is connected
 	connected := u.isConnected()
 
-	// If not connected, skip and return success (continue normally)
+	// Availability outage: allow the request through.
 	if !connected {
 		return true, nil
 	}
@@ -516,17 +555,35 @@ func (u *UsageFlowAPI) useAllocationRequest(ledgerId string, amount *float64, al
 	}
 
 	payload := &socket.UseAllocationRequest{
-		Alias:        ledgerId,
-		Amount:       amt,
-		AllocationID: allocationId,
-		Metadata:     metadata,
+		Alias:               ledgerId,
+		Amount:              amt,
+		AllocationID:        allocationId,
+		WaitForConfirmation: rateLimited,
+		Metadata:            metadata,
 	}
 
 	if rateLimited {
-		u.socketManager.Send(&socket.UsageFlowSocketMessage{
+		response, err := u.socketManager.SendAsync(&socket.UsageFlowSocketMessage{
 			Type:    "use_allocation",
 			Payload: payload,
 		})
+		if err != nil {
+			u.mu.Lock()
+			u.connected = false
+			u.mu.Unlock()
+			// Transport failure = UsageFlow unavailable → fail open.
+			return true, nil
+		}
+		if response.Error != "" || strings.EqualFold(response.Type, "error") {
+			msg := response.Error
+			if msg == "" {
+				msg = response.Message
+			}
+			if msg == "" {
+				msg = "settlement denied"
+			}
+			return false, fmt.Errorf("rate-limit settlement denied: %s", msg)
+		}
 
 		return true, nil
 	}
@@ -537,6 +594,27 @@ func (u *UsageFlowAPI) useAllocationRequest(ledgerId string, amount *float64, al
 	})
 
 	return true, nil
+}
+
+// isUsageFlowAvailabilityError reports transport/outage failures where the
+// customer API should stay up. Explicit quota/policy denials return false.
+func isUsageFlowAvailabilityError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	switch {
+	case strings.Contains(msg, "websocket not connected"),
+		strings.Contains(msg, "authorization unavailable"),
+		strings.Contains(msg, "settlement unavailable"),
+		strings.Contains(msg, "authorization failed"),
+		strings.Contains(msg, "settlement failed"),
+		strings.Contains(msg, "request timeout"),
+		strings.Contains(msg, "i/o timeout"):
+		return true
+	default:
+		return false
+	}
 }
 
 // ExecuteRequestWithMetadata executes the initial allocation request
@@ -557,6 +635,20 @@ func (u *UsageFlowAPI) ExecuteRequestWithMetadata(ledgerId, method, url string, 
 			metaCopy[k] = v
 		}
 		store.SetRequestAllocation(allocationId, ledgerId, metaCopy)
+	}
+
+	// Rate limits protect handler execution, so settle the default request unit
+	// synchronously before c.Next(). The post-handler fulfill path is reserved
+	// for non-rate-limited or response-derived metering.
+	if rateLimited {
+		success, err := u.useAllocationRequest(ledgerId, &amount, allocationId, metadata, true)
+		if err != nil {
+			return false, err
+		}
+		if !success {
+			return false, fmt.Errorf("rate-limit settlement failed")
+		}
+		c.Set("usageflowSettledBeforeHandler", true)
 	}
 
 	return true, nil
@@ -586,6 +678,12 @@ func (u *UsageFlowAPI) IsConnected() bool {
 
 // ExecuteFulfillRequestWithMetadata executes the fulfill request after the main request is processed
 func (u *UsageFlowAPI) ExecuteFulfillRequestWithMetadata(ledgerId, method, url string, metadata map[string]interface{}, c *gin.Context) (bool, error) {
+	if settled, ok := c.Get("usageflowSettledBeforeHandler"); ok {
+		if settledBeforeHandler, ok := settled.(bool); ok && settledBeforeHandler {
+			return true, nil
+		}
+	}
+
 	// Check if socket is connected
 	connected := u.isConnected()
 
@@ -783,8 +881,14 @@ func (u *UsageFlowAPI) GetUserPrefix(c *gin.Context, method, url string) (string
 	var rateLimited bool
 	var matched bool
 
-	// Find matching config for current method and url
+	// Find matching config for current method and url.
+	// FUNCTION policies share method+url with the parent route but must not
+	// drive HTTP identity/rate-limit — that made endpoint requests fail-closed
+	// whenever a function policy had hasRateLimit (USA-62 / Fivicon).
 	for _, cfg := range config {
+		if strings.EqualFold(cfg.Type, "FUNCTION") {
+			continue
+		}
 		// Check if this config matches the current method and url
 		if cfg.Method != method || cfg.Url != url {
 			continue

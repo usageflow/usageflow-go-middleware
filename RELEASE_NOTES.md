@@ -1,6 +1,20 @@
 # Release Notes
 
-## v2.5.1 (Latest)
+## v2.5.5 (Latest)
+
+### Fixes
+
+- **Gin FUNCTION rate limits**: instrumented `*gin.Context` handlers now `AbortWithStatusJSON(429)` when a FUNCTION policy denies allocation. Previously the block error was discarded (handlers have no `error` return), so function rate limits never stopped HTTP requests.
+
+## v2.5.4
+
+### Fixes
+
+- **FUNCTION vs API rate limits (JS/Python parity)**: `GetUserPrefix` ignores `type: FUNCTION` policies when deciding HTTP sync rate limiting. Function policies are enforced only via instrumentation callbacks (same as JS `guessLedgerId` / Python `policies_map`).
+- **Availability fail-open**: when the UsageFlow WebSocket is down or a transport timeout occurs, rate-limited HTTP routes no longer return 429 / take down the customer API. Explicit quota denials still fail closed.
+- **Function policy matching**: look up FUNCTION policies by function name when Console stores identity as `headers`/`DiscoverHandler` instead of `filePath:funcName` (Python `_find_function_policy` parity).
+
+## v2.5.1
 
 ### Fixes
 

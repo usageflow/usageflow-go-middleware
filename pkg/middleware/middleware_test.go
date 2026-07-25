@@ -2,14 +2,17 @@ package middleware
 
 import (
 	"bytes"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/usageflow/usageflow-go-middleware/v2/pkg/config"
+	"github.com/usageflow/usageflow-go-middleware/v2/pkg/socket"
 )
 
 func TestNew(t *testing.T) {
@@ -383,6 +386,35 @@ func TestUsageFlowAPI_GetUserPrefix(t *testing.T) {
 
 		// Rate limiting
 		{
+			name:   "FUNCTION hasRateLimit must not force HTTP rateLimited",
+			method: "POST",
+			url:    "/api/v1/discover",
+			config: []config.ApiConfigStrategy{
+				{
+					Type:                  "FUNCTION",
+					Method:                "POST",
+					Url:                   "/api/v1/discover",
+					HasRateLimit:          true,
+					IdentityFieldName:     stringPtr("DiscoverHandler"),
+					IdentityFieldLocation: stringPtr("headers"),
+				},
+				{
+					Type:                  "API",
+					Method:                "POST",
+					Url:                   "/api/v1/discover",
+					HasRateLimit:          false,
+					IdentityFieldName:     stringPtr("Cf-Connecting-Ip"),
+					IdentityFieldLocation: stringPtr("headers"),
+				},
+			},
+			setup: func(c *gin.Context) {
+				c.Request.Header.Set("Cf-Connecting-Ip", "84.95.96.36")
+			},
+			expected:    "84.95.96.36",
+			rateLimited: false,
+			description: "Function policies share method+url but must not enable HTTP sync rate limiting",
+		},
+		{
 			name:   "rate limited flag",
 			method: "GET",
 			url:    "/api/limited",
@@ -712,6 +744,66 @@ func TestIsRouteMonitored(t *testing.T) {
 	}
 }
 
+func TestApplyRouteConfig(t *testing.T) {
+	reportAll := false
+	api := &UsageFlowAPI{
+		localWhitelist: []config.Route{
+			{Method: "GET", URL: "/local-health"},
+		},
+		reportAllFunctionAllocations: true,
+	}
+
+	err := api.applyRouteConfig(config.ApplicationConfigResponse{
+		MonitorPaths: []interface{}{
+			map[string]interface{}{"method": "GET", "url": "/users"},
+			map[string]interface{}{"method": "POST", "url": "/orders"},
+			map[string]interface{}{"method": "", "url": "/ignored"},
+		},
+		WhitelistEndpoints: []interface{}{
+			map[string]interface{}{"method": "GET", "url": "/health"},
+		},
+		ReportAllFunctionAllocations: &reportAll,
+	})
+
+	assert.NoError(t, err)
+	assert.Equal(t, []config.Route{
+		{Method: "GET", URL: "/health"},
+	}, api.WhitelistEndpoints)
+	assert.Equal(t, []config.Route{
+		{Method: "GET", URL: "/users"},
+		{Method: "POST", URL: "/orders"},
+		{Method: "", URL: "/ignored"},
+	}, api.MonitoringPaths)
+	assert.True(t, isRouteMonitored("GET", "/users", api.monitoringPathsMap))
+	assert.True(t, isRouteMonitored("POST", "/orders", api.monitoringPathsMap))
+	assert.False(t, isRouteMonitored("GET", "/ignored", api.monitoringPathsMap))
+	assert.True(t, isWhitelisted("GET", "/health", api.whitelistEndpointsMap))
+	assert.True(t, isWhitelisted("GET", "/local-health", api.whitelistEndpointsMap))
+	assert.False(t, api.reportAllFunctionAllocations)
+}
+
+func TestApplyRouteConfigDoesNotPartiallyUpdateInvalidConfig(t *testing.T) {
+	api := &UsageFlowAPI{
+		WhitelistEndpoints:    []config.Route{{Method: "GET", URL: "/old-health"}},
+		MonitoringPaths:       []config.Route{{Method: "GET", URL: "/old-users"}},
+		whitelistEndpointsMap: routesToMap([]config.Route{{Method: "GET", URL: "/old-health"}}),
+		monitoringPathsMap:    routesToMap([]config.Route{{Method: "GET", URL: "/old-users"}}),
+	}
+
+	err := api.applyRouteConfig(config.ApplicationConfigResponse{
+		WhitelistEndpoints: []interface{}{
+			map[string]interface{}{"method": "GET", "url": "/new-health"},
+		},
+		MonitorPaths: []interface{}{"not-a-route"},
+	})
+
+	assert.ErrorContains(t, err, "failed to convert monitor paths")
+	assert.Equal(t, []config.Route{{Method: "GET", URL: "/old-health"}}, api.WhitelistEndpoints)
+	assert.Equal(t, []config.Route{{Method: "GET", URL: "/old-users"}}, api.MonitoringPaths)
+	assert.True(t, isWhitelisted("GET", "/old-health", api.whitelistEndpointsMap))
+	assert.True(t, isRouteMonitored("GET", "/old-users", api.monitoringPathsMap))
+}
+
 func TestForceMonitorAll_IgnoresRemoteMonitoringPaths(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
@@ -754,6 +846,149 @@ func TestUsageFlowAPI_ExecuteRequestWithMetadata(t *testing.T) {
 	success, err := api.ExecuteRequestWithMetadata("ledger-id", "GET", "/api/users", metadata, c, false)
 	assert.NoError(t, err)
 	assert.True(t, success)
+
+	// Rate-limited routes also fail open when UsageFlow is unavailable so
+	// customer APIs are not taken down by an agent outage.
+	success, err = api.ExecuteRequestWithMetadata("ledger-id", "GET", "/api/users", metadata, c, true)
+	assert.NoError(t, err)
+	assert.True(t, success)
+}
+
+func TestRequestInterceptor_RateLimitedRouteFailsOpenWhenSocketUnavailable(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	api := New("test-api-key")
+	defer api.socketManager.Close()
+	api.ForceMonitorAll()
+	api.ApiConfig = []config.ApiConfigStrategy{
+		{
+			Method:       http.MethodPost,
+			Url:          "/api/v1/discover",
+			HasRateLimit: true,
+		},
+	}
+
+	handlerCalled := false
+	r := gin.New()
+	r.Use(api.RequestInterceptor())
+	r.POST("/api/v1/discover", func(c *gin.Context) {
+		handlerCalled = true
+		c.Status(http.StatusOK)
+	})
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/discover", strings.NewReader(`{"domain":"fivicon.com"}`))
+	req.Header.Set("Content-Type", "application/json")
+	r.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.True(t, handlerCalled)
+}
+
+func TestRequestInterceptor_RateLimitedRouteSettlesBeforeHandler(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	tests := []struct {
+		name          string
+		useResponse   *socket.UsageFlowSocketResponse
+		expectedCode  int
+		handlerCalled bool
+	}{
+		{
+			name:          "confirmed settlement runs handler",
+			useResponse:   &socket.UsageFlowSocketResponse{Type: "success", Payload: map[string]interface{}{"eventId": "event-1"}},
+			expectedCode:  http.StatusOK,
+			handlerCalled: true,
+		},
+		{
+			name:          "denied settlement blocks handler",
+			useResponse:   &socket.UsageFlowSocketResponse{Type: "error", Error: "quota exceeded"},
+			expectedCode:  http.StatusTooManyRequests,
+			handlerCalled: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			manager := &fakeSocketManager{
+				connected: true,
+				responses: []*socket.UsageFlowSocketResponse{
+					{Type: "success", Payload: map[string]interface{}{"allocationId": "allocation-1"}},
+					tt.useResponse,
+				},
+			}
+			api := &UsageFlowAPI{
+				ApiConfig: []config.ApiConfigStrategy{
+					{Method: http.MethodPost, Url: "/api/v1/discover", HasRateLimit: true},
+				},
+				BlockedEndpoints: map[string]bool{},
+				policyMap:        make(PolicyMap),
+				socketManager:    manager,
+				connected:        true,
+				forceMonitorAll:  true,
+				functionPolicies: make(map[string]config.ApiConfigStrategy),
+			}
+
+			handlerCalled := false
+			r := gin.New()
+			r.Use(api.RequestInterceptor())
+			r.POST("/api/v1/discover", func(c *gin.Context) {
+				handlerCalled = true
+				c.Status(http.StatusOK)
+			})
+
+			w := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/discover", strings.NewReader(`{"domain":"fivicon.com"}`))
+			req.Header.Set("Content-Type", "application/json")
+			r.ServeHTTP(w, req)
+
+			assert.Equal(t, tt.expectedCode, w.Code)
+			assert.Equal(t, tt.handlerCalled, handlerCalled)
+			if assert.Len(t, manager.asyncMessages, 2) {
+				use, ok := manager.asyncMessages[1].Payload.(*socket.UseAllocationRequest)
+				if assert.True(t, ok) {
+					assert.True(t, use.WaitForConfirmation)
+					assert.Equal(t, "allocation-1", use.AllocationID)
+				}
+			}
+		})
+	}
+}
+
+func TestRequestInterceptor_NonRateLimitedRouteRemainsAsync(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	manager := &fakeSocketManager{connected: true}
+	api := &UsageFlowAPI{
+		ApiConfig:        []config.ApiConfigStrategy{},
+		BlockedEndpoints: map[string]bool{},
+		policyMap:        make(PolicyMap),
+		socketManager:    manager,
+		connected:        true,
+		forceMonitorAll:  true,
+		functionPolicies: make(map[string]config.ApiConfigStrategy),
+	}
+
+	handlerCalled := false
+	r := gin.New()
+	r.Use(api.RequestInterceptor())
+	r.POST("/api/v1/discover", func(c *gin.Context) {
+		handlerCalled = true
+		c.Status(http.StatusOK)
+	})
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/discover", strings.NewReader(`{"domain":"fivicon.com"}`))
+	req.Header.Set("Content-Type", "application/json")
+	r.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.True(t, handlerCalled)
+	assert.Empty(t, manager.asyncMessages, "non-rate-limited metering must not wait for a response")
+	if assert.Len(t, manager.sentMessages, 2) {
+		assert.Equal(t, "request_for_allocation", manager.sentMessages[0].Type)
+		assert.Equal(t, "use_allocation", manager.sentMessages[1].Type)
+	}
 }
 
 func TestUsageFlowAPI_ExecuteFulfillRequestWithMetadata(t *testing.T) {
@@ -777,6 +1012,34 @@ func TestUsageFlowAPI_ExecuteFulfillRequestWithMetadata(t *testing.T) {
 	assert.NoError(t, err)
 	assert.True(t, success)
 }
+
+type fakeSocketManager struct {
+	connected     bool
+	responses     []*socket.UsageFlowSocketResponse
+	asyncMessages []*socket.UsageFlowSocketMessage
+	sentMessages  []*socket.UsageFlowSocketMessage
+}
+
+func (f *fakeSocketManager) Send(message *socket.UsageFlowSocketMessage) error {
+	f.sentMessages = append(f.sentMessages, message)
+	return nil
+}
+
+func (f *fakeSocketManager) SendAsync(message *socket.UsageFlowSocketMessage) (*socket.UsageFlowSocketResponse, error) {
+	f.asyncMessages = append(f.asyncMessages, message)
+	if len(f.responses) == 0 {
+		return nil, errors.New("no fake response configured")
+	}
+	response := f.responses[0]
+	f.responses = f.responses[1:]
+	return response, nil
+}
+
+func (f *fakeSocketManager) IsConnected() bool {
+	return f.connected
+}
+
+func (f *fakeSocketManager) Close() {}
 
 // Helper function
 func stringPtr(s string) *string {

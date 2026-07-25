@@ -184,6 +184,17 @@ func isGinContextType(expr ast.Expr) bool {
 	return ok && pkg.Name == "gin" && sel.Sel.Name == "Context"
 }
 
+func ginContextIdent(fn *ast.FuncDecl) *ast.Ident {
+	if fn.Type.Params == nil || len(fn.Type.Params.List) == 0 {
+		return nil
+	}
+	first := fn.Type.Params.List[0]
+	if !isGinContextType(first.Type) || len(first.Names) == 0 {
+		return nil
+	}
+	return first.Names[0]
+}
+
 func injectHook(fn *ast.FuncDecl, ctxExpr ast.Expr, fileBase, pkgPath, moduleName string, index int, trackerPkg string) {
 	funcName := fn.Name.Name
 	if fn.Recv != nil && len(fn.Recv.List) > 0 {
@@ -238,8 +249,53 @@ func injectHook(fn *ast.FuncDecl, ctxExpr ast.Expr, fileBase, pkgPath, moduleNam
 			},
 			Body: &ast.BlockStmt{List: []ast.Stmt{assignErr, &ast.ReturnStmt{}}},
 		})
+	} else if ginIdent := ginContextIdent(fn); ginIdent != nil {
+		// Gin handlers have no error return — abort the HTTP request on denial.
+		assign := &ast.AssignStmt{
+			Lhs: []ast.Expr{callVar, blockVar},
+			Tok: token.DEFINE,
+			Rhs: []ast.Expr{beginCall},
+		}
+		abortCall := &ast.ExprStmt{X: &ast.CallExpr{
+			Fun: &ast.SelectorExpr{
+				X:   ginIdent,
+				Sel: ast.NewIdent("AbortWithStatusJSON"),
+			},
+			Args: []ast.Expr{
+				&ast.BasicLit{Kind: token.INT, Value: "429"},
+				&ast.CompositeLit{
+					Type: &ast.MapType{
+						Key:   ast.NewIdent("string"),
+						Value: &ast.InterfaceType{Methods: &ast.FieldList{}},
+					},
+					Elts: []ast.Expr{
+						&ast.KeyValueExpr{
+							Key:   stringLit("error"),
+							Value: stringLit("rate_limit_exceeded"),
+						},
+						&ast.KeyValueExpr{
+							Key: stringLit("message"),
+							Value: &ast.CallExpr{
+								Fun: &ast.SelectorExpr{
+									X:   blockVar,
+									Sel: ast.NewIdent("Error"),
+								},
+							},
+						},
+					},
+				},
+			},
+		}}
+		prelude = append(prelude, assign, &ast.IfStmt{
+			Cond: &ast.BinaryExpr{
+				X:  blockVar,
+				Op: token.NEQ,
+				Y:  ast.NewIdent("nil"),
+			},
+			Body: &ast.BlockStmt{List: []ast.Stmt{abortCall, &ast.ReturnStmt{}}},
+		})
 	} else {
-		// No error return — discard block error (cannot abort without changing signature).
+		// No error return and not gin — discard block error (cannot abort without changing signature).
 		assign := &ast.AssignStmt{
 			Lhs: []ast.Expr{callVar, ast.NewIdent("_")},
 			Tok: token.DEFINE,
