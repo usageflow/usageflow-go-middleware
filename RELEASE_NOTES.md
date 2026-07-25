@@ -1,6 +1,12 @@
 # Release Notes
 
-## v2.5.5 (Latest)
+## v2.5.6 (Latest)
+
+### Fixes
+
+- **Plan usage cap (USA-51)**: honor SDK `accountReachLimit` from config/policy polls. When the UsageFlow account hits its billing-period request limit, metering and function discovery pause (fail soft — customer HTTP continues; no further allocate/report traffic).
+
+## v2.5.5
 
 ### Fixes
 
