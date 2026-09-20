@@ -147,3 +147,35 @@ unavailable remotely, so no link is included here.
 Before releasing documentation changes, complete [RELEASE_CHECKLIST.md](RELEASE_CHECKLIST.md).
 
 MIT — see [LICENSE](LICENSE).
+
+## Vibe: metered LLM calls (`pkg/vibe`)
+
+Go port of `@usageflow/vibe`. It wraps Anthropic and OpenAI behind one client and
+uses the same UsageFlow WebSocket flow as the JS SDK: `request_for_allocation`
+(a worst-case reservation) → provider call → `use_allocation` (settled with real
+token usage).
+
+```go
+import "github.com/usageflow/usageflow-go-middleware/v2/pkg/vibe"
+
+client, err := vibe.New(vibe.Options{APIKey: os.Getenv("USAGEFLOW_API_KEY")})
+if err != nil { log.Fatal(err) }
+defer client.Destroy()
+
+res, err := client.Chat(ctx, vibe.ChatRequest{
+	Identity: "cust_acme",
+	Workflow: "support-agent", // optional Vibe policy slug
+	Provider: vibe.ProviderAnthropic,
+	Model:    "claude-sonnet-5",
+	Messages: []vibe.Message{{Role: "user", Content: "Summarize this ticket."}},
+})
+var rej *vibe.RejectionError
+if errors.As(err, &rej) { /* denied by quota/policy; the provider was never called */ }
+```
+
+- `Chat`, `Stream`, `Embed`, `Withdraw`, `Credit`, and the reserve-now/settle-later pair `WithdrawAsync` / `CreditAsync` + `Close` are supported. Provider keys
+  resolve from `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` unless set in `Options`.
+- Vibe policy tiers can reroute the model (`ROUTE_MODEL` / `DEGRADE`); `res.Provider`,
+  `res.Model` and `res.VibePolicy` reflect what actually ran.
+- `Stream` settles after the provider stream closes; drain `stream.Text`, then call `stream.Result()`.
+- Not yet ported from the JS SDK: image, speak, transcribe, moderate and batch.

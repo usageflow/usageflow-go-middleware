@@ -237,7 +237,8 @@ func (u *UsageFlowAPI) beginTracking(c *gin.Context, method, url string) *tracke
 }
 
 // finishTracking sends report_call_chain after the handler (fail soft).
-func (u *UsageFlowAPI) finishTracking(c *gin.Context, method, url string, store *tracker.TrackingContext) {
+// gin.Context is unused but kept in the signature for call-symmetry with beginTracking.
+func (u *UsageFlowAPI) finishTracking(_ *gin.Context, method, url string, store *tracker.TrackingContext) {
 	defer func() {
 		_ = recover()
 	}()
@@ -280,8 +281,8 @@ func (u *UsageFlowAPI) FetchApiConfig() ([]config.ApiConfigStrategy, error) {
 		return nil, err
 	}
 
-	// The response payload is a map[string]interface{} with "policies" and "total" keys
-	payloadMap, ok := response.Payload.(map[string]interface{})
+	// The response payload is a map[string]any with "policies" and "total" keys
+	payloadMap, ok := response.Payload.(map[string]any)
 	if !ok {
 		return nil, fmt.Errorf("unexpected response payload type: %T", response.Payload)
 	}
@@ -297,13 +298,6 @@ func (u *UsageFlowAPI) FetchApiConfig() ([]config.ApiConfigStrategy, error) {
 		}
 		if err := json.Unmarshal(policiesBytes, &policyList.Policies); err != nil {
 			return nil, fmt.Errorf("failed to unmarshal policies: %v", err)
-		}
-	}
-
-	// Handle total
-	if totalVal, ok := payloadMap["total"]; ok {
-		if totalFloat, ok := totalVal.(float64); ok {
-			policyList.Total = int(totalFloat)
 		}
 	}
 
@@ -326,8 +320,8 @@ func (u *UsageFlowAPI) FetchApplicationConfig() (config.ApplicationConfigRespons
 		return applicationConfigResponse, err
 	}
 
-	// The response payload is a map[string]interface{}
-	payloadMap, ok := response.Payload.(map[string]interface{})
+	// The response payload is a map[string]any
+	payloadMap, ok := response.Payload.(map[string]any)
 	if !ok {
 		return applicationConfigResponse, fmt.Errorf("unexpected payload type for application config")
 	}
@@ -415,8 +409,8 @@ func (u *UsageFlowAPI) FetchBlockedEndpoints() error {
 	// Convert the response payload to BlockedEndpoints
 	var blockedEndpointsResponse config.BlockedEndpointsResponse
 
-	// The response payload is a map[string]interface{}
-	payloadMap, ok := response.Payload.(map[string]interface{})
+	// The response payload is a map[string]any
+	payloadMap, ok := response.Payload.(map[string]any)
 	if !ok {
 		return fmt.Errorf("unexpected payload type for blocked endpoints")
 	}
@@ -456,7 +450,7 @@ func (u *UsageFlowAPI) FetchBlockedEndpoints() error {
 	return nil
 }
 
-func (u *UsageFlowAPI) allocateRequest(ledgerId string, amount *float64, metadata map[string]interface{}, rateLimited bool) (string, error) {
+func (u *UsageFlowAPI) allocateRequest(ledgerId string, amount *float64, metadata map[string]any, rateLimited bool, identityMetadata, requestMetadata map[string]any) (string, error) {
 	// Check if socket is connected (this updates the status)
 	connected := u.isConnected()
 
@@ -478,9 +472,11 @@ func (u *UsageFlowAPI) allocateRequest(ledgerId string, amount *float64, metadat
 	}
 
 	payload := &socket.RequestForAllocation{
-		Alias:    ledgerId,
-		Amount:   amt,
-		Metadata: metadata,
+		Alias:            ledgerId,
+		Amount:           amt,
+		Metadata:         metadata,
+		IdentityMetadata: identityMetadata,
+		RequestMetadata:  requestMetadata,
 	}
 
 	if !rateLimited {
@@ -520,8 +516,8 @@ func (u *UsageFlowAPI) allocateRequest(ledgerId string, amount *float64, metadat
 		return "", fmt.Errorf("failed to allocate request: %s", msg)
 	}
 
-	// The response payload is a map[string]interface{} with "allocationId" key
-	payloadMap, ok := response.Payload.(map[string]interface{})
+	// The response payload is a map[string]any with "allocationId" key
+	payloadMap, ok := response.Payload.(map[string]any)
 	if !ok {
 		return "", fmt.Errorf("rate-limit authorization returned unexpected payload type %T", response.Payload)
 	}
@@ -534,7 +530,7 @@ func (u *UsageFlowAPI) allocateRequest(ledgerId string, amount *float64, metadat
 	return allocationId, nil
 }
 
-func (u *UsageFlowAPI) useAllocationRequest(ledgerId string, amount *float64, allocationId string, metadata map[string]interface{}, rateLimited bool) (bool, error) {
+func (u *UsageFlowAPI) useAllocationRequest(ledgerId string, amount *float64, allocationId string, metadata map[string]any, rateLimited bool, identityMetadata, requestMetadata map[string]any) (bool, error) {
 	// Check if socket is connected
 	connected := u.isConnected()
 
@@ -560,6 +556,8 @@ func (u *UsageFlowAPI) useAllocationRequest(ledgerId string, amount *float64, al
 		AllocationID:        allocationId,
 		WaitForConfirmation: rateLimited,
 		Metadata:            metadata,
+		IdentityMetadata:    identityMetadata,
+		RequestMetadata:     requestMetadata,
 	}
 
 	if rateLimited {
@@ -618,9 +616,11 @@ func isUsageFlowAvailabilityError(err error) bool {
 }
 
 // ExecuteRequestWithMetadata executes the initial allocation request
-func (u *UsageFlowAPI) ExecuteRequestWithMetadata(ledgerId, method, url string, metadata map[string]interface{}, c *gin.Context, rateLimited bool) (bool, error) {
+func (u *UsageFlowAPI) ExecuteRequestWithMetadata(ledgerId, method, url string, metadata map[string]any, c *gin.Context, rateLimited bool) (bool, error) {
 	amount := float64(1)
-	allocationId, err := u.allocateRequest(ledgerId, &amount, metadata, rateLimited)
+	identityMetadata := getContextMetadata(c, identityMetadataContextKey)
+	requestMetadata := getContextMetadata(c, requestMetadataContextKey)
+	allocationId, err := u.allocateRequest(ledgerId, &amount, metadata, rateLimited, identityMetadata, requestMetadata)
 	if err != nil {
 		return false, err
 	}
@@ -630,7 +630,7 @@ func (u *UsageFlowAPI) ExecuteRequestWithMetadata(ledgerId, method, url string, 
 
 	// Propagate HTTP allocation context so function-level metering can correlate.
 	if store := tracker.FromContext(c.Request.Context()); store != nil {
-		metaCopy := make(map[string]interface{}, len(metadata))
+		metaCopy := make(map[string]any, len(metadata))
 		for k, v := range metadata {
 			metaCopy[k] = v
 		}
@@ -641,7 +641,7 @@ func (u *UsageFlowAPI) ExecuteRequestWithMetadata(ledgerId, method, url string, 
 	// synchronously before c.Next(). The post-handler fulfill path is reserved
 	// for non-rate-limited or response-derived metering.
 	if rateLimited {
-		success, err := u.useAllocationRequest(ledgerId, &amount, allocationId, metadata, true)
+		success, err := u.useAllocationRequest(ledgerId, &amount, allocationId, metadata, true, identityMetadata, requestMetadata)
 		if err != nil {
 			return false, err
 		}
@@ -677,7 +677,7 @@ func (u *UsageFlowAPI) IsConnected() bool {
 }
 
 // ExecuteFulfillRequestWithMetadata executes the fulfill request after the main request is processed
-func (u *UsageFlowAPI) ExecuteFulfillRequestWithMetadata(ledgerId, method, url string, metadata map[string]interface{}, c *gin.Context) (bool, error) {
+func (u *UsageFlowAPI) ExecuteFulfillRequestWithMetadata(ledgerId, method, url string, metadata map[string]any, c *gin.Context) (bool, error) {
 	if settled, ok := c.Get("usageflowSettledBeforeHandler"); ok {
 		if settledBeforeHandler, ok := settled.(bool); ok && settledBeforeHandler {
 			return true, nil
@@ -721,7 +721,9 @@ func (u *UsageFlowAPI) ExecuteFulfillRequestWithMetadata(ledgerId, method, url s
 		}
 	}
 
-	success, err := u.useAllocationRequest(ledgerId, &amount, allocationId.(string), metadata, isRateLimited)
+	identityMetadata := getContextMetadata(c, identityMetadataContextKey)
+	requestMetadata := getContextMetadata(c, requestMetadataContextKey)
+	success, err := u.useAllocationRequest(ledgerId, &amount, allocationId.(string), metadata, isRateLimited, identityMetadata, requestMetadata)
 	if err != nil {
 		// On error, return success to continue normally
 		return true, nil
@@ -730,8 +732,8 @@ func (u *UsageFlowAPI) ExecuteFulfillRequestWithMetadata(ledgerId, method, url s
 }
 
 // collectRequestMetadata gathers metadata from the request
-func (u *UsageFlowAPI) collectRequestMetadata(c *gin.Context) map[string]interface{} {
-	metadata := map[string]interface{}{
+func (u *UsageFlowAPI) collectRequestMetadata(c *gin.Context) map[string]any {
+	metadata := map[string]any{
 		"applicationId": u.ApplicationId,
 		"method":        c.Request.Method,
 		"url":           GetPatternedURL(c), // Route pattern
@@ -804,7 +806,7 @@ func (u *UsageFlowAPI) collectRequestMetadata(c *gin.Context) map[string]interfa
 			c.Request.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
 
 			// Try to parse as JSON — store as requestBody (Console expects body = response).
-			var bodyJSON interface{}
+			var bodyJSON any
 			if err := json.Unmarshal(bodyBytes, &bodyJSON); err == nil {
 				metadata["requestBody"] = bodyJSON
 			} else {
@@ -824,6 +826,94 @@ func (u *UsageFlowAPI) GuessLedgerId(c *gin.Context) string {
 	url := GetPatternedURL(c)
 
 	return fmt.Sprintf("%s %s", method, url)
+}
+
+// Gin context keys used to carry identity/request metadata attached via
+// SetIdentityMetadata/SetRequestMetadata through to the allocation payloads.
+const (
+	identityMetadataContextKey = "usageflowIdentityMetadata"
+	requestMetadataContextKey  = "usageflowRequestMetadata"
+)
+
+// sanitizeMetadataValues drops any metadata values that aren't
+// string/int/float/bool (HLD MVP scope — no nested objects/arrays). Returns
+// nil if nothing valid remains, so callers can omit the field entirely
+// rather than sending an empty object on the wire.
+func sanitizeMetadataValues(values map[string]any) map[string]any {
+	if len(values) == 0 {
+		return nil
+	}
+	sanitized := make(map[string]any, len(values))
+	for k, v := range values {
+		switch v.(type) {
+		case string, bool,
+			int, int8, int16, int32, int64,
+			uint, uint8, uint16, uint32, uint64,
+			float32, float64:
+			sanitized[k] = v
+		}
+	}
+	if len(sanitized) == 0 {
+		return nil
+	}
+	return sanitized
+}
+
+// getContextMetadata reads back sanitized metadata previously attached to
+// this gin.Context under key (via SetIdentityMetadata/SetRequestMetadata or
+// c.Set directly).
+func getContextMetadata(c *gin.Context, key string) map[string]any {
+	raw, exists := c.Get(key)
+	if !exists {
+		return nil
+	}
+	values, ok := raw.(map[string]any)
+	if !ok {
+		return nil
+	}
+	return sanitizeMetadataValues(values)
+}
+
+// SetIdentityMetadata attaches durable per-identity context (e.g. plan, tier, org, region) to
+// be carried on the outgoing allocation request for this request. UsageFlow does not infer
+// this — the app supplies it. The backend persists it against the identity so it applies to
+// that identity's future requests too (see USA-137). Call from a gin handler registered BEFORE
+// RequestInterceptor() in the chain, since identity/request metadata is read off the
+// gin.Context when the allocation request is built.
+//
+// Kept separate from SetRequestMetadata — identity metadata and request metadata are never
+// merged into one bag on the wire.
+func (u *UsageFlowAPI) SetIdentityMetadata(c *gin.Context, values map[string]any) {
+	sanitized := sanitizeMetadataValues(values)
+	if sanitized == nil {
+		return
+	}
+	existing := getContextMetadata(c, identityMetadataContextKey)
+	for k, v := range sanitized {
+		if existing == nil {
+			existing = make(map[string]any, len(sanitized))
+		}
+		existing[k] = v
+	}
+	c.Set(identityMetadataContextKey, existing)
+}
+
+// SetRequestMetadata attaches context that applies only to this single request (e.g. a
+// one-off override). Does NOT persist across the identity's future requests — see
+// SetIdentityMetadata for that. Call before RequestInterceptor() runs, same as above.
+func (u *UsageFlowAPI) SetRequestMetadata(c *gin.Context, values map[string]any) {
+	sanitized := sanitizeMetadataValues(values)
+	if sanitized == nil {
+		return
+	}
+	existing := getContextMetadata(c, requestMetadataContextKey)
+	for k, v := range sanitized {
+		if existing == nil {
+			existing = make(map[string]any, len(sanitized))
+		}
+		existing[k] = v
+	}
+	c.Set(requestMetadataContextKey, existing)
 }
 
 func isWhitelisted(method, url string, whiteListMap map[string]map[string]bool) bool {
@@ -914,7 +1004,7 @@ func (u *UsageFlowAPI) GetUserPrefix(c *gin.Context, method, url string) (string
 		case "query_params":
 			identifier = c.Query(*cfg.IdentityFieldName)
 		case "body":
-			var bodyMap map[string]interface{}
+			var bodyMap map[string]any
 			if err := c.ShouldBindJSON(&bodyMap); err == nil {
 				if val, ok := bodyMap[*cfg.IdentityFieldName]; ok {
 					if strVal, ok := val.(string); ok {

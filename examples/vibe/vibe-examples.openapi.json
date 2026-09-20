@@ -1,0 +1,1314 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "UsageFlow Vibe Example Apps (JS + Go)",
+    "version": "1.0.0",
+    "description": "Import into Postman together with the two environment files, then pick 'Vibe JS (4002)' or 'Vibe Go (4003)'. Routes tagged 'JS only' are not implemented in the Go app yet. A 403 means UsageFlow denied the call (quota/policy)."
+  },
+  "servers": [
+    {
+      "url": "{{base_url}}",
+      "description": "Set base_url via the Postman environment (Vibe JS = :4002, Vibe Go = :4003)"
+    }
+  ],
+  "tags": [
+    {
+      "name": "Health"
+    },
+    {
+      "name": "Chat"
+    },
+    {
+      "name": "Embeddings"
+    },
+    {
+      "name": "Ledger"
+    },
+    {
+      "name": "JS only"
+    }
+  ],
+  "paths": {
+    "/api/health": {
+      "get": {
+        "tags": [
+          "Health"
+        ],
+        "summary": "Health check",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "example": {
+                  "status": "ok"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/chat/openai": {
+      "post": {
+        "tags": [
+          "Chat"
+        ],
+        "summary": "Chat via OpenAI",
+        "description": "",
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChatBody"
+              },
+              "example": {
+                "prompt": "Say hello in 5 words",
+                "identity": "cust_acme",
+                "workflow": "vibe-example-openai",
+                "plan": "Enterprise"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Rejected by UsageFlow quota/policy",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server / provider error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/chat/anthropic": {
+      "post": {
+        "tags": [
+          "Chat"
+        ],
+        "summary": "Chat via Anthropic",
+        "description": "",
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChatBody"
+              },
+              "example": {
+                "prompt": "Say hello in 5 words",
+                "identity": "free_user",
+                "workflow": "vibe-example-anthropic",
+                "plan": "Free"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Rejected by UsageFlow quota/policy",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server / provider error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/stream/openai": {
+      "post": {
+        "tags": [
+          "Chat"
+        ],
+        "summary": "Stream via OpenAI",
+        "description": "Returns { chunks, result } once the stream closes and usage is settled.",
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChatBody"
+              },
+              "example": {
+                "prompt": "Say hello in 5 words"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Rejected by UsageFlow quota/policy",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server / provider error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/stream/anthropic": {
+      "post": {
+        "tags": [
+          "Chat"
+        ],
+        "summary": "Stream via Anthropic",
+        "description": "Returns { chunks, result } once the stream closes and usage is settled.",
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChatBody"
+              },
+              "example": {
+                "prompt": "Say hello in 5 words"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Rejected by UsageFlow quota/policy",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server / provider error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/embed": {
+      "post": {
+        "tags": [
+          "Embeddings"
+        ],
+        "summary": "OpenAI embeddings",
+        "description": "JS accepts a string or array for `input`; Go accepts `input` (array) or falls back to `prompt`.",
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EmbedBody"
+              },
+              "example": {
+                "input": [
+                  "hello world"
+                ],
+                "identity": "cust_acme"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Rejected by UsageFlow quota/policy",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server / provider error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/withdraw": {
+      "post": {
+        "tags": [
+          "Ledger"
+        ],
+        "summary": "Withdraw (reserve + settle now)",
+        "description": "Real ledger deduction. Defaults \u2014 JS: example-user / 10; Go: cust_acme / 50.",
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WithdrawBody"
+              },
+              "example": {
+                "identity": "cust_acme",
+                "amount": 50,
+                "idempotencyKey": "demo-1",
+                "reason": "manual test"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Rejected by UsageFlow quota/policy",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server / provider error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/credit": {
+      "post": {
+        "tags": [
+          "Ledger"
+        ],
+        "summary": "Credit (negative reversal)",
+        "description": "",
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WithdrawBody"
+              },
+              "example": {
+                "identity": "cust_acme",
+                "amount": 50,
+                "idempotencyKey": "demo-credit-1"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Rejected by UsageFlow quota/policy",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server / provider error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/withdraw-async": {
+      "post": {
+        "tags": [
+          "Ledger"
+        ],
+        "summary": "Withdraw async \u2014 reserve now, returns captureId",
+        "description": "Holds quota only; nothing is deducted until /api/close. Copy the returned captureId into /api/close.",
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WithdrawBody"
+              },
+              "example": {
+                "identity": "cust_acme",
+                "amount": 100,
+                "idempotencyKey": "demo-2",
+                "workflow": "vibe-example-openai"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Rejected by UsageFlow quota/policy",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server / provider error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/credit-async": {
+      "post": {
+        "tags": [
+          "Ledger"
+        ],
+        "summary": "Credit async \u2014 reserve negative, returns captureId",
+        "description": "",
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WithdrawBody"
+              },
+              "example": {
+                "identity": "cust_acme",
+                "amount": 50,
+                "idempotencyKey": "demo-credit-2"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Rejected by UsageFlow quota/policy",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server / provider error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/close": {
+      "post": {
+        "tags": [
+          "Ledger"
+        ],
+        "summary": "Close a capture (settle)",
+        "description": "Settles a capture from withdraw-async/credit-async. `amount` defaults to the reserved amount. `identity` is only needed if the capture was made by another process. A capture closes once.",
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CloseBody"
+              },
+              "example": {
+                "captureId": "<captureId from withdraw-async>",
+                "amount": 60
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Rejected by UsageFlow quota/policy",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server / provider error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/chat/tools": {
+      "post": {
+        "tags": [
+          "JS only"
+        ],
+        "summary": "Chat with tool calls",
+        "description": "JS example app only.",
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ToolsBody"
+              },
+              "example": {
+                "prompt": "What is the weather in Paris?",
+                "provider": "openai"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Rejected by UsageFlow quota/policy",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server / provider error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/image": {
+      "post": {
+        "tags": [
+          "JS only"
+        ],
+        "summary": "Image generation (OpenAI)",
+        "description": "JS example app only.",
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ImageBody"
+              },
+              "example": {
+                "prompt": "A red fox",
+                "n": 1,
+                "size": "1024x1024"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Rejected by UsageFlow quota/policy",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server / provider error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/transcribe": {
+      "post": {
+        "tags": [
+          "JS only"
+        ],
+        "summary": "Transcribe audio (base64)",
+        "description": "JS example app only.",
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TranscribeBody"
+              },
+              "example": {
+                "audioBase64": "<base64>",
+                "filename": "audio.mp3"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Rejected by UsageFlow quota/policy",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server / provider error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/speak": {
+      "post": {
+        "tags": [
+          "JS only"
+        ],
+        "summary": "Text to speech",
+        "description": "JS example app only.",
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SpeakBody"
+              },
+              "example": {
+                "input": "Hello there",
+                "voice": "alloy"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Rejected by UsageFlow quota/policy",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server / provider error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/moderate": {
+      "post": {
+        "tags": [
+          "JS only"
+        ],
+        "summary": "Moderation (unmetered)",
+        "description": "JS example app only.",
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ModerateBody"
+              },
+              "example": {
+                "input": "hello"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Rejected by UsageFlow quota/policy",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server / provider error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/batch/submit": {
+      "post": {
+        "tags": [
+          "JS only"
+        ],
+        "summary": "Batch submit",
+        "description": "JS example app only.",
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BatchSubmitBody"
+              },
+              "example": {
+                "provider": "openai",
+                "identity": "cust_acme",
+                "items": [
+                  {
+                    "id": "1",
+                    "messages": [
+                      {
+                        "role": "user",
+                        "content": "hi"
+                      }
+                    ]
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Rejected by UsageFlow quota/policy",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server / provider error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/batch/{batchId}/status": {
+      "get": {
+        "tags": [
+          "JS only"
+        ],
+        "summary": "Batch status",
+        "description": "JS example app only.",
+        "parameters": [
+          {
+            "name": "batchId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "provider",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "openai",
+                "anthropic"
+              ],
+              "default": "openai"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Rejected by UsageFlow quota/policy",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server / provider error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/batch/{batchId}/settle": {
+      "post": {
+        "tags": [
+          "JS only"
+        ],
+        "summary": "Batch settle",
+        "description": "JS example app only.",
+        "parameters": [
+          {
+            "name": "batchId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BatchSettleBody"
+              },
+              "example": {
+                "provider": "openai",
+                "allocationId": "<allocationId from submit>"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Rejected by UsageFlow quota/policy",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server / provider error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "Error": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          }
+        }
+      },
+      "ChatBody": {
+        "type": "object",
+        "properties": {
+          "prompt": {
+            "type": "string"
+          },
+          "identity": {
+            "type": "string"
+          },
+          "workflow": {
+            "type": "string",
+            "description": "Vibe policy slug"
+          },
+          "plan": {
+            "type": "string",
+            "description": "Sent as customerMetadata.plan"
+          }
+        }
+      },
+      "EmbedBody": {
+        "type": "object",
+        "properties": {
+          "input": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "identity": {
+            "type": "string"
+          },
+          "workflow": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string",
+            "description": "JS only"
+          }
+        }
+      },
+      "WithdrawBody": {
+        "type": "object",
+        "properties": {
+          "identity": {
+            "type": "string"
+          },
+          "amount": {
+            "type": "number"
+          },
+          "idempotencyKey": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "workflow": {
+            "type": "string"
+          }
+        }
+      },
+      "CloseBody": {
+        "type": "object",
+        "required": [
+          "captureId"
+        ],
+        "properties": {
+          "captureId": {
+            "type": "string"
+          },
+          "amount": {
+            "type": "number"
+          },
+          "identity": {
+            "type": "string"
+          },
+          "workflow": {
+            "type": "string"
+          }
+        }
+      },
+      "ToolsBody": {
+        "type": "object",
+        "properties": {
+          "prompt": {
+            "type": "string"
+          },
+          "identity": {
+            "type": "string"
+          },
+          "workflow": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string",
+            "enum": [
+              "openai",
+              "anthropic"
+            ]
+          }
+        }
+      },
+      "ImageBody": {
+        "type": "object",
+        "properties": {
+          "prompt": {
+            "type": "string"
+          },
+          "identity": {
+            "type": "string"
+          },
+          "workflow": {
+            "type": "string"
+          },
+          "n": {
+            "type": "integer"
+          },
+          "size": {
+            "type": "string"
+          },
+          "quality": {
+            "type": "string"
+          }
+        }
+      },
+      "TranscribeBody": {
+        "type": "object",
+        "properties": {
+          "audioBase64": {
+            "type": "string"
+          },
+          "filename": {
+            "type": "string"
+          },
+          "identity": {
+            "type": "string"
+          },
+          "workflow": {
+            "type": "string"
+          },
+          "language": {
+            "type": "string"
+          }
+        }
+      },
+      "SpeakBody": {
+        "type": "object",
+        "properties": {
+          "input": {
+            "type": "string"
+          },
+          "identity": {
+            "type": "string"
+          },
+          "workflow": {
+            "type": "string"
+          },
+          "voice": {
+            "type": "string"
+          }
+        }
+      },
+      "ModerateBody": {
+        "type": "object",
+        "properties": {
+          "input": {
+            "type": "string"
+          },
+          "identity": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          }
+        }
+      },
+      "BatchSubmitBody": {
+        "type": "object",
+        "properties": {
+          "identity": {
+            "type": "string"
+          },
+          "workflow": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string",
+            "enum": [
+              "openai",
+              "anthropic"
+            ]
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          }
+        }
+      },
+      "BatchSettleBody": {
+        "type": "object",
+        "properties": {
+          "provider": {
+            "type": "string",
+            "enum": [
+              "openai",
+              "anthropic"
+            ]
+          },
+          "allocationId": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}

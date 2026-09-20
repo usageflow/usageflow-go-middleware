@@ -2,36 +2,49 @@ package socket
 
 // UsageFlowSocketMessage represents a message sent to UsageFlow via WebSocket
 type UsageFlowSocketMessage struct {
-	Type    string      `json:"type"`
-	Payload interface{} `json:"payload"`
-	ID      string      `json:"id,omitempty"`
+	Type    string `json:"type"`
+	Payload any    `json:"payload"`
+	ID      string `json:"id,omitempty"`
 }
 
 // UsageFlowSocketResponse represents a response from UsageFlow via WebSocket
 type UsageFlowSocketResponse struct {
-	Type    string      `json:"type"`
-	Payload interface{} `json:"payload,omitempty"`
-	ID      string      `json:"id,omitempty"`
-	ReplyTo string      `json:"replyTo,omitempty"`
-	Message string      `json:"message,omitempty"`
-	Error   string      `json:"error,omitempty"`
+	Type    string `json:"type"`
+	Payload any    `json:"payload,omitempty"`
+	ID      string `json:"id,omitempty"`
+	ReplyTo string `json:"replyTo,omitempty"`
+	Message string `json:"message,omitempty"`
+	Error   string `json:"error,omitempty"`
 }
 
 // RequestForAllocation represents the payload for allocation requests
 type RequestForAllocation struct {
-	Alias        string                 `json:"alias"`
-	Amount       float64                `json:"amount"`
-	Metadata     map[string]interface{} `json:"metadata,omitempty"`
-	AllocationID *string                `json:"allocationId,omitempty"`
+	Alias        string         `json:"alias"`
+	Amount       float64        `json:"amount"`
+	Metadata     map[string]any `json:"metadata,omitempty"`
+	AllocationID *string        `json:"allocationId,omitempty"`
+	// IdentityMetadata carries durable context about *who* is calling (e.g. plan, tier, org,
+	// region), supplied by the app — UsageFlow never infers this. The backend persists it
+	// against the identity so it applies to that identity's future requests too (USA-137).
+	// Kept as a separate field from RequestMetadata — never flattened together — so the backend
+	// can distinguish durable vs. per-call context.
+	IdentityMetadata map[string]any `json:"identityMetadata,omitempty"`
+	// RequestMetadata carries context for this single request only. Does NOT persist to the
+	// identity's future requests. Kept separate from IdentityMetadata — see above.
+	RequestMetadata map[string]any `json:"requestMetadata,omitempty"`
 }
 
 // UseAllocationRequest represents the payload for using an allocation
 type UseAllocationRequest struct {
-	Alias               string                 `json:"alias"`
-	Amount              float64                `json:"amount"`
-	AllocationID        string                 `json:"allocationId"`
-	WaitForConfirmation bool                   `json:"waitForConfirmation,omitempty"`
-	Metadata            map[string]interface{} `json:"metadata,omitempty"`
+	Alias               string         `json:"alias"`
+	Amount              float64        `json:"amount"`
+	AllocationID        string         `json:"allocationId"`
+	WaitForConfirmation bool           `json:"waitForConfirmation,omitempty"`
+	Metadata            map[string]any `json:"metadata,omitempty"`
+	// IdentityMetadata / RequestMetadata: same semantics as in RequestForAllocation — kept as
+	// separate wire fields, never merged.
+	IdentityMetadata map[string]any `json:"identityMetadata,omitempty"`
+	RequestMetadata  map[string]any `json:"requestMetadata,omitempty"`
 }
 
 // PolicyResponse represents the response for get_application_policies
@@ -67,9 +80,9 @@ type AllocationResponse struct {
 // ReportCallChainPayload is sent after a request with type "report_call_chain".
 // Shape matches JS/Python agents for Console/ledger parity.
 type ReportCallChainPayload struct {
-	Method             string      `json:"method"`
-	URL                string      `json:"url"`
-	CallChain          interface{} `json:"callChain"`
-	Timestamp          string      `json:"timestamp"`
-	UsageflowRequestID string      `json:"usageflowRequestId,omitempty"`
+	Method             string `json:"method"`
+	URL                string `json:"url"`
+	CallChain          any    `json:"callChain"`
+	Timestamp          string `json:"timestamp"`
+	UsageflowRequestID string `json:"usageflowRequestId,omitempty"`
 }

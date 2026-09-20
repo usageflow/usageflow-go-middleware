@@ -1,6 +1,20 @@
 # Release Notes
 
-## v2.5.7 (Latest)
+## v2.6.0 (Latest)
+
+### Features
+
+- **Vibe SDK (`pkg/vibe`)**: Go port of `@usageflow/vibe`. One client wraps Anthropic and OpenAI behind a single interface and uses the same UsageFlow socket flow as the JS SDK: `request_for_allocation` reservation → provider call → `use_allocation` settle with real token usage. Supports `Chat`, `Stream`, `Embed`, `Withdraw` and `Credit`. A denial returns `*vibe.RejectionError` and the provider is never called. Vibe policy tiers can reroute the model (`ROUTE_MODEL` / `DEGRADE`); OpenAI reasoning models are handled. Not yet ported: image, speak, transcribe, moderate, batch.
+- **Reserve now, settle later**: `WithdrawAsync` / `CreditAsync` reserve quota and return a `CaptureID`; `Close` settles it later with the final amount (defaults to the reserved amount). `Workflow` is supported on all ledger calls. Closing a capture from another process needs `Identity`.
+- **Identity and request metadata (USA-137)**: new `SetIdentityMetadata(c, …)` / `SetRequestMetadata(c, …)` on the middleware. Allocation and settle payloads now carry `identityMetadata` (durable context about the identity) and `requestMetadata` (this request only) as separate fields; string/number/bool values only.
+- **Socket URL override**: `socket.NewUsageFlowSocketManagerWithURL` lets you point the pool at a non-default WebSocket URL (`NewUsageFlowSocketManager` is unchanged).
+- **Vibe example app**: `examples/vibe` (default port 4003) mirrors the JS `vibe-app` routes, with an OpenAPI file and Postman environments.
+
+### Notes
+
+- Internal: `interface{}` → `any` cleanup in the middleware; no exported API change.
+
+## v2.5.7
 
 ### Fixes
 

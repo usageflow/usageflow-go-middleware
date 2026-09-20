@@ -1,0 +1,18 @@
+{
+  "name": "Vibe Go (4003)",
+  "values": [
+    {
+      "key": "port",
+      "value": "4003",
+      "type": "default",
+      "enabled": true
+    },
+    {
+      "key": "base_url",
+      "value": "http://localhost:{{port}}",
+      "type": "default",
+      "enabled": true
+    }
+  ],
+  "_postman_variable_scope": "environment"
+}

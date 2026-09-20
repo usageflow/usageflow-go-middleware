@@ -50,6 +50,15 @@ type UsageFlowSocketManager struct {
 
 // NewUsageFlowSocketManager creates a new WebSocket manager instance
 func NewUsageFlowSocketManager(apiKey string, poolSize ...int) *UsageFlowSocketManager {
+	return NewUsageFlowSocketManagerWithURL(apiKey, "", poolSize...)
+}
+
+// NewUsageFlowSocketManagerWithURL is NewUsageFlowSocketManager with an explicit
+// WebSocket URL; an empty wsURL falls back to the default.
+func NewUsageFlowSocketManagerWithURL(apiKey, wsURL string, poolSize ...int) *UsageFlowSocketManager {
+	if wsURL == "" {
+		wsURL = defaultWSURL
+	}
 	size := defaultPoolSize
 	if len(poolSize) > 0 && poolSize[0] > 0 {
 		size = poolSize[0]
@@ -60,7 +69,7 @@ func NewUsageFlowSocketManager(apiKey string, poolSize ...int) *UsageFlowSocketM
 
 	socket := &UsageFlowSocketManager{
 		connections: make([]*PooledConnection, 0),
-		wsURL:       defaultWSURL,
+		wsURL:       wsURL,
 		poolSize:    size,
 		apiKey:      apiKey,
 	}
