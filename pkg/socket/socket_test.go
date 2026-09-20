@@ -9,6 +9,7 @@ import (
 
 	"github.com/gorilla/websocket"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestNewUsageFlowSocketManager(t *testing.T) {
@@ -256,4 +257,40 @@ func TestConstants(t *testing.T) {
 	assert.Equal(t, 60*time.Second, pongWait)
 	assert.Equal(t, 10*time.Second, writeWait)
 	assert.Equal(t, 5, maxReconnectTries)
+}
+
+// Regression: the ping loop leaves a 10s write deadline on the connection. A normal write
+// after it expired used to fail with "i/o timeout" until the next ping.
+func TestSendAsync_SucceedsWithExpiredWriteDeadline(t *testing.T) {
+	t.Setenv("USAGEFLOW_DISABLE_WS", "")
+	upgrader := websocket.Upgrader{CheckOrigin: func(r *http.Request) bool { return true }}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		for {
+			var msg UsageFlowSocketMessage
+			if err := conn.ReadJSON(&msg); err != nil {
+				return
+			}
+			conn.WriteJSON(UsageFlowSocketResponse{Type: "response", ID: msg.ID, ReplyTo: msg.ID})
+		}
+	}))
+	defer server.Close()
+
+	m := NewUsageFlowSocketManagerWithURL("test-key", "ws"+server.URL[4:], 1)
+	defer m.Destroy()
+	require.Eventually(t, m.IsConnected, 5*time.Second, 20*time.Millisecond)
+
+	conn := m.getConnection()
+	require.NotNil(t, conn)
+	conn.mu.Lock()
+	conn.ws.SetWriteDeadline(time.Now().Add(-time.Second)) // what an idle ping leaves behind
+	conn.mu.Unlock()
+
+	resp, err := m.SendAsync(&UsageFlowSocketMessage{Type: "request_for_allocation", Payload: map[string]any{"alias": "x"}})
+	require.NoError(t, err)
+	assert.Equal(t, "response", resp.Type)
 }

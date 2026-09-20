@@ -1,6 +1,13 @@
 # Release Notes
 
-## v2.6.0 (Latest)
+## v2.6.1 (Latest)
+
+### Fixes
+
+- **WebSocket writes failing with `i/o timeout` (all agents)**: the keep-alive ping left a 10s write deadline on the connection, and regular writes never set their own, so for ~20s of every 30s any request failed instantly with `write tcp …: i/o timeout`. Every write now sets its own deadline. Affects the HTTP middleware and `pkg/vibe`.
+- **Vibe SDK calls were never counted or merged in the Console**: `pkg/vibe` now stamps one `usageflowRequestId` on each operation's reserve and settle (`Chat`, `Stream`, `Embed`, `Withdraw`, `Credit`, `WithdrawAsync`/`Close`). The ledger counts account usage by this ID and the Console merges a reserve and its close into one row by it; without it every event stood alone and SDK traffic was not counted as calls.
+
+## v2.6.0
 
 ### Features
 

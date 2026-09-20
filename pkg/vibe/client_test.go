@@ -222,3 +222,22 @@ func TestWithdrawAsyncThenClose(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, float64(-7), cc.Amount)
 }
+
+func TestReserveAndSettleShareUsageflowRequestID(t *testing.T) {
+	sock := &mockSocket{}
+	c := newWithTransport(Options{}, sock)
+	cp, err := c.WithdrawAsync(context.Background(), WithdrawRequest{Identity: "c", Amount: 1, IdempotencyKey: "k"})
+	require.NoError(t, err)
+	_, err = c.Close(context.Background(), CloseRequest{CaptureID: cp.CaptureID})
+	require.NoError(t, err)
+	reserveMeta := sock.sent[0].Payload.(map[string]any)["metadata"].(map[string]any)
+	settleMeta := sock.sent[1].Payload.(map[string]any)["metadata"].(map[string]any)
+	assert.NotEmpty(t, reserveMeta["usageflowRequestId"])
+	assert.Equal(t, reserveMeta["usageflowRequestId"], settleMeta["usageflowRequestId"])
+
+	// Closing a capture held by another process still stamps an ID (the capture ID).
+	_, err = c.Close(context.Background(), CloseRequest{CaptureID: "remote-1", Identity: "c"})
+	require.NoError(t, err)
+	remote := sock.sent[2].Payload.(map[string]any)["metadata"].(map[string]any)
+	assert.Equal(t, "remote-1", remote["usageflowRequestId"])
+}

@@ -155,6 +155,15 @@ type reservation struct {
 // reserve sends request_for_allocation. Extra fields (allocationMetadata etc.) are added by the caller.
 func (c *Client) reserve(identity string, amount float64, workflow, model string, metadata, customerMeta map[string]any) (*reservation, error) {
 	allocationID := uuid.NewString()
+	// One request ID per metered operation, on both the reserve and the settle (which copies
+	// this metadata). The ledger counts calls by usageflowRequestId and the Console merges a
+	// reserve and its close into one row by it; without it every event stands alone.
+	if metadata == nil {
+		metadata = map[string]any{}
+	}
+	if _, ok := metadata["usageflowRequestId"]; !ok {
+		metadata["usageflowRequestId"] = allocationID
+	}
 	payload := map[string]any{
 		"alias":        identity,
 		"amount":       amount,
@@ -501,7 +510,8 @@ func (c *Client) Close(_ context.Context, req CloseRequest) (*WithdrawResult, er
 				"rawUrl": "vibe:withdraw:" + req.Identity, "clientIP": "internal",
 				"timestamp": time.Now().UTC().Format(time.RFC3339Nano),
 				"headers":   map[string]any{}, "queryParams": nil, "pathParams": nil,
-				"body": map[string]any{"identity": req.Identity, "idempotencyKey": req.CaptureID},
+				"usageflowRequestId": req.CaptureID,
+				"body":               map[string]any{"identity": req.Identity, "idempotencyKey": req.CaptureID},
 			},
 		}
 		if req.Workflow != "" {

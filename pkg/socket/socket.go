@@ -482,6 +482,9 @@ func (m *UsageFlowSocketManager) Send(payload *UsageFlowSocketMessage) error {
 		return fmt.Errorf("failed to marshal message: %w", err)
 	}
 
+	// Every write sets its own deadline: the ping loop's deadline expires after writeWait,
+	// and a stale one makes writes fail with "i/o timeout" until the next ping.
+	conn.ws.SetWriteDeadline(time.Now().Add(writeWait))
 	return conn.ws.WriteMessage(websocket.TextMessage, messageBytes)
 }
 
@@ -530,6 +533,7 @@ func (m *UsageFlowSocketManager) asyncSend(payload *UsageFlowSocketMessage, conn
 
 	// Send message
 	conn.mu.Lock()
+	conn.ws.SetWriteDeadline(time.Now().Add(writeWait))
 	err = conn.ws.WriteMessage(websocket.TextMessage, messageBytes)
 	conn.mu.Unlock()
 
