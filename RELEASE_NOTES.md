@@ -1,6 +1,12 @@
 # Release Notes
 
-## v2.6.1 (Latest)
+## v2.6.2 (Latest)
+
+### Features
+
+- **`pkg/vibe`: `Credits()`** — read-only account/identity/per-workflow usage via a new `get_credits` socket message. Returns the account's plan credits, the identity's usage, and — per workflow — how many credits are left before it blocks (with next-tier info). Nothing is reserved or charged; call it from a request handler to show users their own usage. Returns `vibe.ErrCreditsUnsupported` against a UsageFlow server that predates `get_credits`.
+
+## v2.6.1
 
 ### Fixes
 
