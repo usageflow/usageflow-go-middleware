@@ -241,3 +241,60 @@ func TestReserveAndSettleShareUsageflowRequestID(t *testing.T) {
 	remote := sock.sent[2].Payload.(map[string]any)["metadata"].(map[string]any)
 	assert.Equal(t, "remote-1", remote["usageflowRequestId"])
 }
+
+func TestCredits(t *testing.T) {
+	sock := &mockSocket{reply: func(m *socket.UsageFlowSocketMessage) *socket.UsageFlowSocketResponse {
+		return &socket.UsageFlowSocketResponse{Type: "success", Payload: map[string]any{
+			"account":  map[string]any{"planId": "free", "used": 10, "limit": 1000, "remaining": 990, "exceeded": false},
+			"identity": map[string]any{"identity": "203.0.113.1", "used": 4, "known": true},
+			"workflows": []any{map[string]any{
+				"workflow": "free-landing-page", "policyId": "vpol_1", "limit": 5, "used": 4, "remaining": 1,
+				"blocked": false, "resetInterval": "1d",
+				"nextTier": map[string]any{"tierIndex": 0, "thresholdValue": 5, "remaining": 1, "action": map[string]any{"type": "BLOCK"}},
+			}},
+		}}
+	}}
+	c := newWithTransport(Options{}, sock)
+
+	res, err := c.Credits(context.Background(), CreditsRequest{
+		Identity: "203.0.113.1", Workflow: "free-landing-page",
+		CustomerMetadata: map[string]any{"plan": "free", "bad": map[string]any{"x": 1}},
+	})
+	require.NoError(t, err)
+
+	sent := sock.sent[0]
+	assert.Equal(t, "get_credits", sent.Type)
+	p := sent.Payload.(map[string]any)
+	assert.Equal(t, "203.0.113.1", p["identity"])
+	assert.Equal(t, "free-landing-page", p["workflow"])
+	assert.Equal(t, map[string]any{"plan": "free"}, p["customerMetadata"])
+
+	require.NotNil(t, res.Account)
+	assert.Equal(t, int64(990), *res.Account.Remaining)
+	assert.Equal(t, 4.0, res.Identity.Used)
+	require.Len(t, res.Workflows, 1)
+	w := res.Workflows[0]
+	assert.Equal(t, 1.0, *w.Remaining)
+	assert.Equal(t, "1d", w.ResetInterval)
+	assert.Equal(t, "BLOCK", w.NextTier.Action.Type)
+}
+
+func TestCreditsErrors(t *testing.T) {
+	c := newWithTransport(Options{}, &mockSocket{})
+	_, err := c.Credits(context.Background(), CreditsRequest{})
+	assert.Error(t, err) // identity required
+
+	old := newWithTransport(Options{}, &mockSocket{reply: func(*socket.UsageFlowSocketMessage) *socket.UsageFlowSocketResponse {
+		return &socket.UsageFlowSocketResponse{Type: "error", Error: "No handler registered for type: get_credits"}
+	}})
+	_, err = old.Credits(context.Background(), CreditsRequest{Identity: "u"})
+	assert.ErrorIs(t, err, ErrCreditsUnsupported)
+
+	denied := newWithTransport(Options{}, &mockSocket{reply: func(*socket.UsageFlowSocketMessage) *socket.UsageFlowSocketResponse {
+		return &socket.UsageFlowSocketResponse{Type: "error", Error: "workflow not found"}
+	}})
+	_, err = denied.Credits(context.Background(), CreditsRequest{Identity: "u", Workflow: "x"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "workflow not found")
+	assert.NotErrorIs(t, err, ErrCreditsUnsupported)
+}

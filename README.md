@@ -178,4 +178,16 @@ if errors.As(err, &rej) { /* denied by quota/policy; the provider was never call
 - Vibe policy tiers can reroute the model (`ROUTE_MODEL` / `DEGRADE`); `res.Provider`,
   `res.Model` and `res.VibePolicy` reflect what actually ran.
 - `Stream` settles after the provider stream closes; drain `stream.Text`, then call `stream.Result()`.
+- `Credits` is read-only and returns what a user has left, so you can show it on your site:
+  the account's plan credits, the identity's usage, and — per workflow — the credits left
+  before it blocks. Usage is counted per identity, so every workflow's limit is measured
+  against that one number. It needs a UsageFlow server that supports `get_credits`
+  (otherwise it returns `vibe.ErrCreditsUnsupported`).
+
+```go
+credits, err := client.Credits(ctx, vibe.CreditsRequest{Identity: "cust_acme", Workflow: "free-landing-page"})
+// credits.Account.Remaining, credits.Identity.Used,
+// credits.Workflows[0].Remaining (nil when the workflow never blocks), .Blocked, .ResetInterval
+```
+
 - Not yet ported from the JS SDK: image, speak, transcribe, moderate and batch.

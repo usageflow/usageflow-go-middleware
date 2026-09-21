@@ -164,6 +164,10 @@ func main() {
 		})
 	}))
 
+	// Read-only: account, identity and per-workflow credits (what you would show your users).
+	mux.HandleFunc("/api/credits", post(func(ctx context.Context, b body) (any, error) {
+		return client.Credits(ctx, vibe.CreditsRequest{Identity: or(b.Identity, "example-user"), Workflow: b.Workflow})
+	}))
 	mux.HandleFunc("/api/withdraw", post(func(ctx context.Context, b body) (any, error) {
 		return client.Withdraw(ctx, withdrawReq(b))
 	}))
