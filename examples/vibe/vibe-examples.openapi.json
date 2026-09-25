@@ -1,14 +1,14 @@
 {
   "openapi": "3.0.3",
   "info": {
-    "title": "UsageFlow Vibe Example Apps (JS + Go)",
+    "title": "UsageFlow Vibe Example Apps (JS + Go + Python)",
     "version": "1.0.0",
-    "description": "Import into Postman together with the two environment files, then pick 'Vibe JS (4002)' or 'Vibe Go (4003)'. Routes tagged 'JS only' are not implemented in the Go app yet. A 403 means UsageFlow denied the call (quota/policy)."
+    "description": "Import into Postman together with the environment files, then pick 'Vibe JS (4002)', 'Vibe Go (4003)' or 'Vibe Python (4004)'. Routes tagged 'JS only' are not implemented in the Go or Python apps yet; /api/chat/tools is in the JS and Python apps. A 403 means UsageFlow denied the call (quota/policy)."
   },
   "servers": [
     {
       "url": "{{base_url}}",
-      "description": "Set base_url via the Postman environment (Vibe JS = :4002, Vibe Go = :4003)"
+      "description": "Set base_url via the Postman environment (Vibe JS = :4002, Vibe Go = :4003, Vibe Python = :4004)"
     }
   ],
   "tags": [
@@ -334,7 +334,7 @@
           "Ledger"
         ],
         "summary": "Withdraw (reserve + settle now)",
-        "description": "Real ledger deduction. Defaults \u2014 JS: example-user / 10; Go: cust_acme / 50.",
+        "description": "Real ledger deduction. Defaults — JS: example-user / 10; Go: cust_acme / 50.",
         "requestBody": {
           "required": false,
           "content": {
@@ -446,8 +446,8 @@
         "tags": [
           "Ledger"
         ],
-        "summary": "Withdraw async \u2014 reserve now, returns captureId",
-        "description": "Holds quota only; nothing is deducted until /api/close. Copy the returned captureId into /api/close.",
+        "summary": "Withdraw async — reserve now, returns captureId",
+        "description": "Holds quota only; nothing is deducted until /api/close. Copy the returned captureId into /api/close. The hold defaults to 24 hours (override with `holdFor`, in seconds); if it expires before you close it, the hold is released and nothing is charged.",
         "requestBody": {
           "required": false,
           "content": {
@@ -459,7 +459,8 @@
                 "identity": "cust_acme",
                 "amount": 100,
                 "idempotencyKey": "demo-2",
-                "workflow": "vibe-example-openai"
+                "workflow": "vibe-example-openai",
+                "holdFor": 7200
               }
             }
           }
@@ -470,7 +471,11 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object"
+                  "$ref": "#/components/schemas/CaptureResult"
+                },
+                "example": {
+                  "captureId": "cap_abc123",
+                  "expiresAt": 1735689600000
                 }
               }
             }
@@ -503,8 +508,8 @@
         "tags": [
           "Ledger"
         ],
-        "summary": "Credit async \u2014 reserve negative, returns captureId",
-        "description": "",
+        "summary": "Credit async — reserve negative, returns captureId",
+        "description": "Holds quota only; nothing is credited until /api/close. The hold defaults to 24 hours (override with `holdFor`, in seconds); if it expires before you close it, the hold is released and nothing is credited.",
         "requestBody": {
           "required": false,
           "content": {
@@ -515,7 +520,8 @@
               "example": {
                 "identity": "cust_acme",
                 "amount": 50,
-                "idempotencyKey": "demo-credit-2"
+                "idempotencyKey": "demo-credit-2",
+                "holdFor": 7200
               }
             }
           }
@@ -526,7 +532,11 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object"
+                  "$ref": "#/components/schemas/CaptureResult"
+                },
+                "example": {
+                  "captureId": "cap_def456",
+                  "expiresAt": 1735689600000
                 }
               }
             }
@@ -612,10 +622,10 @@
     "/api/chat/tools": {
       "post": {
         "tags": [
-          "JS only"
+          "Chat"
         ],
         "summary": "Chat with tool calls",
-        "description": "JS example app only.",
+        "description": "JS example app only. Not in the Go app yet.",
         "requestBody": {
           "required": false,
           "content": {
@@ -1077,6 +1087,51 @@
           }
         }
       }
+    },
+    "/api/credits": {
+      "post": {
+        "tags": [
+          "Ledger"
+        ],
+        "summary": "Credits: account, identity and per-workflow (read-only)",
+        "description": "Returns the account's plan credits, the identity's usage, and per workflow the credits left before it blocks. Nothing is charged. JS also accepts GET ?identity=&workflow=.",
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreditsBody"
+              },
+              "example": {
+                "identity": "cust_acme",
+                "workflow": "free-landing-page"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -1152,6 +1207,23 @@
           },
           "workflow": {
             "type": "string"
+          },
+          "holdFor": {
+            "type": "number",
+            "description": "How long to hold the reservation, in seconds, before it expires unclosed. Only used by /api/withdraw-async and /api/credit-async. Defaults to 86400 (24 hours).",
+            "default": 86400
+          }
+        }
+      },
+      "CaptureResult": {
+        "type": "object",
+        "properties": {
+          "captureId": {
+            "type": "string"
+          },
+          "expiresAt": {
+            "type": "integer",
+            "description": "Epoch ms when the hold expires if not closed. Close the capture before this time or the hold is released without charging."
           }
         }
       },
@@ -1306,6 +1378,18 @@
           },
           "allocationId": {
             "type": "string"
+          }
+        }
+      },
+      "CreditsBody": {
+        "type": "object",
+        "properties": {
+          "identity": {
+            "type": "string"
+          },
+          "workflow": {
+            "type": "string",
+            "description": "Vibe policy slug; omit for all active workflows"
           }
         }
       }

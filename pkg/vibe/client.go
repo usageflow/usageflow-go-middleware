@@ -19,9 +19,20 @@ import (
 // real ceiling, since it is part of the reservation.
 const defaultMaxOutputTokens = 1024
 
+// How long UsageFlow holds a reservation before it expires unsettled. Without an explicit value
+// the server uses 60 s, and an expired reservation is later closed at zero — so a settle that
+// arrives after that is lost and the usage is never charged. Every reserve sends one of these.
+const (
+	callHold           = 10 * time.Minute // Chat, Stream, Embed, Withdraw, Credit
+	defaultCaptureHold = 24 * time.Hour   // WithdrawAsync / CreditAsync unless HoldFor is set
+)
+
 // transport is the slice of the UsageFlow socket the client needs (mockable in tests).
 type transport interface {
 	SendAsync(*socket.UsageFlowSocketMessage) (*socket.UsageFlowSocketResponse, error)
+	// Send is fire-and-forget: it returns once the write succeeds (or fails), without
+	// waiting for a reply. Used for settles, which the ledger applies asynchronously.
+	Send(*socket.UsageFlowSocketMessage) error
 	Destroy()
 }
 
@@ -153,7 +164,7 @@ type reservation struct {
 }
 
 // reserve sends request_for_allocation. Extra fields (allocationMetadata etc.) are added by the caller.
-func (c *Client) reserve(identity string, amount float64, workflow, model string, metadata, customerMeta map[string]any) (*reservation, error) {
+func (c *Client) reserve(identity string, amount float64, workflow, model string, metadata, customerMeta map[string]any, hold time.Duration) (*reservation, error) {
 	allocationID := uuid.NewString()
 	// One request ID per metered operation, on both the reserve and the settle (which copies
 	// this metadata). The ledger counts calls by usageflowRequestId and the Console merges a
@@ -169,6 +180,7 @@ func (c *Client) reserve(identity string, amount float64, workflow, model string
 		"amount":       amount,
 		"allocationId": allocationID,
 		"metadata":     metadata,
+		"duration":     hold.Milliseconds(),
 	}
 	if workflow != "" || model != "" {
 		am := map[string]any{}
@@ -201,13 +213,16 @@ func (c *Client) reserve(identity string, amount float64, workflow, model string
 	return r, nil
 }
 
-// settle sends use_allocation with waitForConfirmation so the server settles in Postgres
-// before ACKing.
+// settle sends use_allocation fire-and-forget (waitForConfirmation: false) and does not wait
+// for a reply — the ledger applies the settlement asynchronously. The returned error means
+// only that the send itself could not be made (socket not connected / write failed); once the
+// send succeeds, a server-side rejection of the settle can no longer be observed here.
 func (c *Client) settle(r *reservation, amount float64, extraMeta map[string]any) error {
 	payload := map[string]any{}
 	for k, v := range r.payload {
 		payload[k] = v
 	}
+	delete(payload, "duration") // reserve-only
 	md := map[string]any{}
 	for k, v := range r.payload["metadata"].(map[string]any) {
 		md[k] = v
@@ -215,9 +230,11 @@ func (c *Client) settle(r *reservation, amount float64, extraMeta map[string]any
 	payload["metadata"] = mergeMap(md, extraMeta)
 	payload["amount"] = amount
 	payload["allocationId"] = r.allocationID
-	payload["waitForConfirmation"] = true
-	_, err := c.send("use_allocation", payload, "settlement failed after reservation was approved")
-	return err
+	payload["waitForConfirmation"] = false
+	if err := c.sock.Send(&socket.UsageFlowSocketMessage{Type: "use_allocation", Payload: payload}); err != nil {
+		return fmt.Errorf("usageflow vibe: use_allocation: %w", err)
+	}
+	return nil
 }
 
 func baseMetadata(method, url, provider, model string, body map[string]any) map[string]any {
@@ -269,7 +286,7 @@ func (c *Client) reserveChat(req *ChatRequest) (*chatReservation, error) {
 	}, req.Metadata)
 	meta := baseMetadata("CHAT", url, string(req.Provider), req.Model, body)
 
-	r, err := c.reserve(req.Identity, float64(est+maxTokens), req.Workflow, req.Model, meta, req.CustomerMetadata)
+	r, err := c.reserve(req.Identity, float64(est+maxTokens), req.Workflow, req.Model, meta, req.CustomerMetadata, callHold)
 	if err != nil {
 		return nil, err
 	}
@@ -281,8 +298,9 @@ func (c *Client) reserveChat(req *ChatRequest) (*chatReservation, error) {
 	return &chatReservation{reservation: r, effective: &eff, maxTokens: maxTokens}, nil
 }
 
-// settleChat settles with real usage. A failure is logged, not returned: the provider call
-// already happened and its result is real.
+// settleChat settles with real usage, fire-and-forget. A failure to even send is logged, not
+// returned: the provider call already happened and its result is real. Because the settle is
+// fire-and-forget, a server-side rejection of it can no longer be observed here.
 func (c *Client) settleChat(orig *ChatRequest, cr *chatReservation, res *ChatResult, start time.Time, method string) {
 	res.RequestedModel = orig.Model
 	res.VibePolicy = cr.policy
@@ -379,7 +397,7 @@ func (c *Client) Embed(ctx context.Context, req EmbedRequest) (*EmbedResult, err
 		"identity": req.Identity, "inputCount": len(req.Input), "estimatedInputTokens": est,
 	}, req.Metadata)
 	meta := baseMetadata("EMBED", url, "openai", req.Model, body)
-	r, err := c.reserve(req.Identity, float64(est), req.Workflow, req.Model, meta, req.CustomerMetadata)
+	r, err := c.reserve(req.Identity, float64(est), req.Workflow, req.Model, meta, req.CustomerMetadata, callHold)
 	if err != nil {
 		return nil, err
 	}
@@ -404,18 +422,25 @@ func (c *Client) Embed(ctx context.Context, req EmbedRequest) (*EmbedResult, err
 			},
 		}},
 	}); err != nil {
+		// Fire-and-forget: this only means the settle couldn't even be sent (socket down /
+		// write failed). A server-side rejection of it can no longer be observed here.
 		log.Printf("usageflow vibe: embed() settlement failed for allocation %s: %v", r.allocationID, err)
 	}
 	return res, nil
 }
 
 // Withdraw deducts Amount from Identity outside a metered call (reserve + immediate settle).
+// The settle is sent fire-and-forget; Withdraw returns once it has been sent, not once the
+// ledger has applied it. The returned error means only that the send failed (couldn't reach
+// UsageFlow) — a server-side rejection of the settle can no longer be observed here.
 func (c *Client) Withdraw(_ context.Context, req WithdrawRequest) (*WithdrawResult, error) {
 	return c.reserveAndSettle(req, req.Amount, "withdraw")
 }
 
 // Credit reverses/corrects a prior withdrawal by sending the amount as negative through the
-// same reserve/settle pair. Negative-amount behavior is unverified against server policy.
+// same reserve/settle pair. Negative-amount behavior is unverified against server policy. Like
+// Withdraw, the settle is fire-and-forget: Credit returns once it has been sent, and a
+// server-side rejection of it can no longer be observed here.
 func (c *Client) Credit(_ context.Context, req WithdrawRequest) (*WithdrawResult, error) {
 	return c.reserveAndSettle(req, negative(req.Amount), "credit")
 }
@@ -427,7 +452,7 @@ func negative(a float64) float64 {
 	return a
 }
 
-func (c *Client) reserveWithdraw(req WithdrawRequest, signed float64, action string) (*reservation, error) {
+func (c *Client) reserveWithdraw(req WithdrawRequest, signed float64, action string, hold time.Duration) (*reservation, error) {
 	if req.Identity == "" || req.IdempotencyKey == "" {
 		return nil, errors.New("usageflow vibe: Identity and IdempotencyKey are required")
 	}
@@ -445,16 +470,17 @@ func (c *Client) reserveWithdraw(req WithdrawRequest, signed float64, action str
 			"reason": req.Reason, "sourceEventType": req.SourceEventType,
 		},
 	}
-	return c.reserve(req.Identity, signed, req.Workflow, "", meta, req.CustomerMetadata)
+	return c.reserve(req.Identity, signed, req.Workflow, "", meta, req.CustomerMetadata, hold)
 }
 
 func (c *Client) reserveAndSettle(req WithdrawRequest, signed float64, action string) (*WithdrawResult, error) {
-	r, err := c.reserveWithdraw(req, signed, action)
+	r, err := c.reserveWithdraw(req, signed, action, callHold)
 	if err != nil {
 		return nil, err
 	}
-	// The amount is already final, so settle the same amount; a failure here means the
-	// deduction never happened, so it is surfaced rather than logged.
+	// The amount is already final, so settle the same amount fire-and-forget; a failure to
+	// send means the deduction was never even dispatched, so it is surfaced rather than
+	// logged (money moves must fail loudly when they could not be sent).
 	if err := c.settle(r, signed, nil); err != nil {
 		return nil, err
 	}
@@ -473,19 +499,32 @@ func (c *Client) CreditAsync(_ context.Context, req WithdrawRequest) (*CaptureRe
 }
 
 func (c *Client) reserveCapture(req WithdrawRequest, signed float64, action string) (*CaptureResult, error) {
-	r, err := c.reserveWithdraw(req, signed, action)
+	hold := req.HoldFor
+	if hold == 0 {
+		hold = defaultCaptureHold
+	}
+	if hold < 0 {
+		return nil, errors.New("usageflow vibe: HoldFor must be positive")
+	}
+	r, err := c.reserveWithdraw(req, signed, action, hold)
 	if err != nil {
 		return nil, err
 	}
 	c.mu.Lock()
 	c.captures[r.allocationID] = pendingCapture{r: r, idempotencyKey: req.IdempotencyKey}
 	c.mu.Unlock()
-	return &CaptureResult{CaptureID: r.allocationID, Identity: req.Identity, Amount: signed, IdempotencyKey: req.IdempotencyKey}, nil
+	return &CaptureResult{
+		CaptureID: r.allocationID, Identity: req.Identity, Amount: signed, IdempotencyKey: req.IdempotencyKey,
+		ExpiresAt: time.Now().Add(hold).UnixMilli(),
+	}, nil
 }
 
 // Close settles a capture from WithdrawAsync/CreditAsync. Amount defaults to the reserved
 // amount. If the capture isn't held by this process, Identity is required. A capture can
-// only be closed once.
+// only be closed once. The settle is sent fire-and-forget: Close returns once it has been
+// sent, not once the ledger has applied it, and a server-side rejection of it can no longer
+// be observed here. The capture is only removed from local tracking once the send succeeds —
+// a failed send leaves it eligible to Close again.
 func (c *Client) Close(_ context.Context, req CloseRequest) (*WithdrawResult, error) {
 	if req.CaptureID == "" {
 		return nil, errors.New("usageflow vibe: CaptureID is required")
@@ -503,11 +542,16 @@ func (c *Client) Close(_ context.Context, req CloseRequest) (*WithdrawResult, er
 		if req.Amount != nil {
 			amt = *req.Amount
 		}
+		// A negative amount closes a CreditAsync hold; label it so the audit log says so.
+		action := "withdraw"
+		if amt < 0 {
+			action = "credit"
+		}
 		payload := map[string]any{
 			"alias": req.Identity, "amount": amt, "allocationId": req.CaptureID,
 			"metadata": map[string]any{
-				"type": "API_CALL", "method": "WITHDRAW", "url": "vibe:withdraw:" + req.Identity,
-				"rawUrl": "vibe:withdraw:" + req.Identity, "clientIP": "internal",
+				"type": "API_CALL", "method": upper(action), "url": "vibe:" + action + ":" + req.Identity,
+				"rawUrl": "vibe:" + action + ":" + req.Identity, "clientIP": "internal",
 				"timestamp": time.Now().UTC().Format(time.RFC3339Nano),
 				"headers":   map[string]any{}, "queryParams": nil, "pathParams": nil,
 				"usageflowRequestId": req.CaptureID,

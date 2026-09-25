@@ -15,9 +15,13 @@ import (
 )
 
 type mockSocket struct {
-	mu    sync.Mutex
-	sent  []*socket.UsageFlowSocketMessage
-	reply func(*socket.UsageFlowSocketMessage) *socket.UsageFlowSocketResponse
+	mu   sync.Mutex
+	sent []*socket.UsageFlowSocketMessage
+	// sentAsync records only the SendAsync calls (reserves / get_credits); sentFF records
+	// only the fire-and-forget Send calls (settles). sent records both, in order.
+	sentFF  []*socket.UsageFlowSocketMessage
+	reply   func(*socket.UsageFlowSocketMessage) *socket.UsageFlowSocketResponse
+	sendErr error // when set, Send (fire-and-forget) fails without recording the message
 }
 
 func (m *mockSocket) SendAsync(msg *socket.UsageFlowSocketMessage) (*socket.UsageFlowSocketResponse, error) {
@@ -29,6 +33,20 @@ func (m *mockSocket) SendAsync(msg *socket.UsageFlowSocketMessage) (*socket.Usag
 	}
 	return &socket.UsageFlowSocketResponse{Type: "ok"}, nil
 }
+
+// Send is the fire-and-forget path used for settles: it returns once the write "succeeds" (or
+// the injected sendErr fires) without waiting for a reply.
+func (m *mockSocket) Send(msg *socket.UsageFlowSocketMessage) error {
+	if m.sendErr != nil {
+		return m.sendErr
+	}
+	m.mu.Lock()
+	m.sent = append(m.sent, msg)
+	m.sentFF = append(m.sentFF, msg)
+	m.mu.Unlock()
+	return nil
+}
+
 func (m *mockSocket) Destroy() {}
 
 func (m *mockSocket) types() []string {
@@ -73,7 +91,7 @@ func TestChatReserveDispatchSettle(t *testing.T) {
 
 	settle := sock.sent[1].Payload.(map[string]any)
 	assert.Equal(t, float64(15), settle["amount"])
-	assert.Equal(t, true, settle["waitForConfirmation"])
+	assert.Equal(t, false, settle["waitForConfirmation"])
 	assert.Equal(t, "vibe:chat:openai:gpt-4o-mini-2024", settle["metadata"].(map[string]any)["url"])
 }
 
@@ -91,6 +109,55 @@ func TestChatDenialSkipsProvider(t *testing.T) {
 	require.True(t, errors.As(err, &rej))
 	assert.Equal(t, "quota_exceeded", rej.Reason)
 	assert.Zero(t, hits)
+	// A denied reserve never dispatches, so no settle is sent.
+	assert.Equal(t, []string{"request_for_allocation"}, sock.types())
+}
+
+// TestChatSucceedsWhenSettleSendFails: the settle is fire-and-forget. If it can't even be
+// sent, Chat still succeeds — the provider call already happened and its result is real.
+func TestChatSucceedsWhenSettleSendFails(t *testing.T) {
+	hits := 0
+	srv := openAIServer(t, &hits)
+	defer srv.Close()
+	sock := &mockSocket{sendErr: errors.New("boom")}
+	c := newWithTransport(Options{OpenAIAPIKey: "k", OpenAIBaseURL: srv.URL}, sock)
+
+	res, err := c.Chat(context.Background(), ChatRequest{
+		Identity: "c", Model: "gpt-4o-mini", Messages: []Message{{Role: "user", Content: "hi"}},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "hi", res.Content)
+	// The reserve went through; the settle attempt failed to send and wasn't recorded.
+	assert.Equal(t, []string{"request_for_allocation"}, sock.types())
+	assert.Empty(t, sock.sentFF)
+}
+
+// TestWithdrawCreditCloseErrorWhenSettleSendFails: for money moves, a failed settle SEND
+// (couldn't reach UsageFlow) must be returned as an error rather than logged.
+func TestWithdrawCreditCloseErrorWhenSettleSendFails(t *testing.T) {
+	sendErr := errors.New("boom")
+	sock := &mockSocket{sendErr: sendErr}
+	c := newWithTransport(Options{}, sock)
+	ctx := context.Background()
+
+	_, err := c.Withdraw(ctx, WithdrawRequest{Identity: "c", Amount: 1, IdempotencyKey: "k1"})
+	require.Error(t, err)
+
+	_, err = c.Credit(ctx, WithdrawRequest{Identity: "c", Amount: 1, IdempotencyKey: "k2"})
+	require.Error(t, err)
+
+	// WithdrawAsync's reserve uses SendAsync, unaffected by sendErr; only the later Close
+	// settle (fire-and-forget) fails to send.
+	cap, err := c.WithdrawAsync(ctx, WithdrawRequest{Identity: "c", Amount: 1, IdempotencyKey: "k3"})
+	require.NoError(t, err)
+	_, err = c.Close(ctx, CloseRequest{CaptureID: cap.CaptureID})
+	require.Error(t, err)
+
+	// The capture is only dropped once the settle send succeeds, so it's still there to retry.
+	c.mu.Lock()
+	_, held := c.captures[cap.CaptureID]
+	c.mu.Unlock()
+	assert.True(t, held)
 }
 
 func TestPolicyRoutesModelAcrossProviders(t *testing.T) {
@@ -210,7 +277,7 @@ func TestWithdrawAsyncThenClose(t *testing.T) {
 	assert.Equal(t, "use_allocation", sock.sent[1].Type)
 	assert.Equal(t, float64(60), settle["amount"])
 	assert.Equal(t, "cust", settle["alias"])
-	assert.Equal(t, true, settle["waitForConfirmation"])
+	assert.Equal(t, false, settle["waitForConfirmation"])
 
 	_, err = c.Close(ctx, CloseRequest{CaptureID: "alloc-9"})
 	assert.Error(t, err) // closes only once
