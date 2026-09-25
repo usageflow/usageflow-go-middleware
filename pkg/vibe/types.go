@@ -3,7 +3,10 @@
 // request_for_allocation reservation and settling real usage with use_allocation.
 package vibe
 
-import "fmt"
+import (
+	"fmt"
+	"time"
+)
 
 // Provider is an upstream LLM provider.
 type Provider string
@@ -107,6 +110,10 @@ type WithdrawRequest struct {
 	// Workflow is an optional Vibe policy slug (allocationMetadata.workflowId).
 	Workflow         string
 	CustomerMetadata map[string]any
+	// HoldFor is how long a WithdrawAsync/CreditAsync hold stays open (default 24h). Close it
+	// before then: a hold that expires unclosed is released without charging. Ignored by
+	// Withdraw/Credit, which settle immediately.
+	HoldFor time.Duration
 }
 
 // CaptureResult is returned by WithdrawAsync: the reservation is approved but not settled.
@@ -116,6 +123,8 @@ type CaptureResult struct {
 	Identity       string  `json:"identity"`
 	Amount         float64 `json:"amount"` // signed: negative for CreditAsync
 	IdempotencyKey string  `json:"idempotencyKey"`
+	// ExpiresAt (epoch ms) is when the hold lapses; Close before then.
+	ExpiresAt int64 `json:"expiresAt"`
 }
 
 // CloseRequest settles a capture. Amount nil means the reserved amount.

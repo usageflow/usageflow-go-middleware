@@ -175,6 +175,12 @@ if errors.As(err, &rej) { /* denied by quota/policy; the provider was never call
 
 - `Chat`, `Stream`, `Embed`, `Withdraw`, `Credit`, and the reserve-now/settle-later pair `WithdrawAsync` / `CreditAsync` + `Close` are supported. Provider keys
   resolve from `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` unless set in `Options`.
+- Every reservation now holds for an explicit time: `Chat`/`Stream`/`Embed`/`Withdraw`/`Credit` hold
+  for 10 minutes, and `WithdrawAsync`/`CreditAsync` hold for 24 hours by default. Set
+  `WithdrawRequest.HoldFor` (a `time.Duration`) to override it — for example `HoldFor: 2 * time.Hour`.
+  The result's `CaptureResult.ExpiresAt` (epoch ms) tells you when the hold expires. Call `Close`
+  before then: closing early charges the amount you pass and releases the rest, but a hold that
+  expires unclosed is released without charging anything.
 - Vibe policy tiers can reroute the model (`ROUTE_MODEL` / `DEGRADE`); `res.Provider`,
   `res.Model` and `res.VibePolicy` reflect what actually ran.
 - `Stream` settles after the provider stream closes; drain `stream.Text`, then call `stream.Result()`.

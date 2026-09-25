@@ -19,6 +19,14 @@ import (
 // real ceiling, since it is part of the reservation.
 const defaultMaxOutputTokens = 1024
 
+// How long UsageFlow holds a reservation before it expires unsettled. Without an explicit value
+// the server uses 60 s, and an expired reservation is later closed at zero — so a settle that
+// arrives after that is lost and the usage is never charged. Every reserve sends one of these.
+const (
+	callHold           = 10 * time.Minute // Chat, Stream, Embed, Withdraw, Credit
+	defaultCaptureHold = 24 * time.Hour   // WithdrawAsync / CreditAsync unless HoldFor is set
+)
+
 // transport is the slice of the UsageFlow socket the client needs (mockable in tests).
 type transport interface {
 	SendAsync(*socket.UsageFlowSocketMessage) (*socket.UsageFlowSocketResponse, error)
@@ -153,7 +161,7 @@ type reservation struct {
 }
 
 // reserve sends request_for_allocation. Extra fields (allocationMetadata etc.) are added by the caller.
-func (c *Client) reserve(identity string, amount float64, workflow, model string, metadata, customerMeta map[string]any) (*reservation, error) {
+func (c *Client) reserve(identity string, amount float64, workflow, model string, metadata, customerMeta map[string]any, hold time.Duration) (*reservation, error) {
 	allocationID := uuid.NewString()
 	// One request ID per metered operation, on both the reserve and the settle (which copies
 	// this metadata). The ledger counts calls by usageflowRequestId and the Console merges a
@@ -169,6 +177,7 @@ func (c *Client) reserve(identity string, amount float64, workflow, model string
 		"amount":       amount,
 		"allocationId": allocationID,
 		"metadata":     metadata,
+		"duration":     hold.Milliseconds(),
 	}
 	if workflow != "" || model != "" {
 		am := map[string]any{}
@@ -208,6 +217,7 @@ func (c *Client) settle(r *reservation, amount float64, extraMeta map[string]any
 	for k, v := range r.payload {
 		payload[k] = v
 	}
+	delete(payload, "duration") // reserve-only
 	md := map[string]any{}
 	for k, v := range r.payload["metadata"].(map[string]any) {
 		md[k] = v
@@ -269,7 +279,7 @@ func (c *Client) reserveChat(req *ChatRequest) (*chatReservation, error) {
 	}, req.Metadata)
 	meta := baseMetadata("CHAT", url, string(req.Provider), req.Model, body)
 
-	r, err := c.reserve(req.Identity, float64(est+maxTokens), req.Workflow, req.Model, meta, req.CustomerMetadata)
+	r, err := c.reserve(req.Identity, float64(est+maxTokens), req.Workflow, req.Model, meta, req.CustomerMetadata, callHold)
 	if err != nil {
 		return nil, err
 	}
@@ -379,7 +389,7 @@ func (c *Client) Embed(ctx context.Context, req EmbedRequest) (*EmbedResult, err
 		"identity": req.Identity, "inputCount": len(req.Input), "estimatedInputTokens": est,
 	}, req.Metadata)
 	meta := baseMetadata("EMBED", url, "openai", req.Model, body)
-	r, err := c.reserve(req.Identity, float64(est), req.Workflow, req.Model, meta, req.CustomerMetadata)
+	r, err := c.reserve(req.Identity, float64(est), req.Workflow, req.Model, meta, req.CustomerMetadata, callHold)
 	if err != nil {
 		return nil, err
 	}
@@ -427,7 +437,7 @@ func negative(a float64) float64 {
 	return a
 }
 
-func (c *Client) reserveWithdraw(req WithdrawRequest, signed float64, action string) (*reservation, error) {
+func (c *Client) reserveWithdraw(req WithdrawRequest, signed float64, action string, hold time.Duration) (*reservation, error) {
 	if req.Identity == "" || req.IdempotencyKey == "" {
 		return nil, errors.New("usageflow vibe: Identity and IdempotencyKey are required")
 	}
@@ -445,11 +455,11 @@ func (c *Client) reserveWithdraw(req WithdrawRequest, signed float64, action str
 			"reason": req.Reason, "sourceEventType": req.SourceEventType,
 		},
 	}
-	return c.reserve(req.Identity, signed, req.Workflow, "", meta, req.CustomerMetadata)
+	return c.reserve(req.Identity, signed, req.Workflow, "", meta, req.CustomerMetadata, hold)
 }
 
 func (c *Client) reserveAndSettle(req WithdrawRequest, signed float64, action string) (*WithdrawResult, error) {
-	r, err := c.reserveWithdraw(req, signed, action)
+	r, err := c.reserveWithdraw(req, signed, action, callHold)
 	if err != nil {
 		return nil, err
 	}
@@ -473,14 +483,24 @@ func (c *Client) CreditAsync(_ context.Context, req WithdrawRequest) (*CaptureRe
 }
 
 func (c *Client) reserveCapture(req WithdrawRequest, signed float64, action string) (*CaptureResult, error) {
-	r, err := c.reserveWithdraw(req, signed, action)
+	hold := req.HoldFor
+	if hold == 0 {
+		hold = defaultCaptureHold
+	}
+	if hold < 0 {
+		return nil, errors.New("usageflow vibe: HoldFor must be positive")
+	}
+	r, err := c.reserveWithdraw(req, signed, action, hold)
 	if err != nil {
 		return nil, err
 	}
 	c.mu.Lock()
 	c.captures[r.allocationID] = pendingCapture{r: r, idempotencyKey: req.IdempotencyKey}
 	c.mu.Unlock()
-	return &CaptureResult{CaptureID: r.allocationID, Identity: req.Identity, Amount: signed, IdempotencyKey: req.IdempotencyKey}, nil
+	return &CaptureResult{
+		CaptureID: r.allocationID, Identity: req.Identity, Amount: signed, IdempotencyKey: req.IdempotencyKey,
+		ExpiresAt: time.Now().Add(hold).UnixMilli(),
+	}, nil
 }
 
 // Close settles a capture from WithdrawAsync/CreditAsync. Amount defaults to the reserved
@@ -503,11 +523,16 @@ func (c *Client) Close(_ context.Context, req CloseRequest) (*WithdrawResult, er
 		if req.Amount != nil {
 			amt = *req.Amount
 		}
+		// A negative amount closes a CreditAsync hold; label it so the audit log says so.
+		action := "withdraw"
+		if amt < 0 {
+			action = "credit"
+		}
 		payload := map[string]any{
 			"alias": req.Identity, "amount": amt, "allocationId": req.CaptureID,
 			"metadata": map[string]any{
-				"type": "API_CALL", "method": "WITHDRAW", "url": "vibe:withdraw:" + req.Identity,
-				"rawUrl": "vibe:withdraw:" + req.Identity, "clientIP": "internal",
+				"type": "API_CALL", "method": upper(action), "url": "vibe:" + action + ":" + req.Identity,
+				"rawUrl": "vibe:" + action + ":" + req.Identity, "clientIP": "internal",
 				"timestamp": time.Now().UTC().Format(time.RFC3339Nano),
 				"headers":   map[string]any{}, "queryParams": nil, "pathParams": nil,
 				"usageflowRequestId": req.CaptureID,

@@ -1,5 +1,11 @@
 # Release Notes
 
+## Unreleased
+
+### Features
+
+- **`pkg/vibe`: explicit hold times on every reservation**: `Chat`, `Stream`, `Embed`, `Withdraw` and `Credit` now reserve for a fixed 10 minutes. `WithdrawAsync` / `CreditAsync` reserve for 24 hours by default — set `WithdrawRequest.HoldFor` (`time.Duration`) to change it. `CaptureResult` gains `ExpiresAt` (epoch ms) so callers know when an open hold lapses. Previously the server defaulted to a 60s hold, so a `Close` call that arrived late could find the reservation already gone; a hold that now expires unclosed is released without charging, and closing early charges the passed amount and releases the rest.
+
 ## v2.6.2 (Latest)
 
 ### Features

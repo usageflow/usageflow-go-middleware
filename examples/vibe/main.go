@@ -9,6 +9,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"time"
 
 	"github.com/usageflow/usageflow-go-middleware/v2/pkg/vibe"
 )
@@ -25,6 +26,7 @@ type body struct {
 	IdempotencyKey string   `json:"idempotencyKey"`
 	Reason         string   `json:"reason"`
 	CaptureID      string   `json:"captureId"`
+	HoldFor        float64  `json:"holdFor"` // seconds; withdraw-async/credit-async only (default 24h)
 	Input          []string `json:"input"`
 }
 
@@ -131,6 +133,7 @@ func withdrawReq(b body) vibe.WithdrawRequest {
 		IdempotencyKey: or(b.IdempotencyKey, "demo-1"),
 		Reason:         or(b.Reason, "manual test"),
 		Workflow:       b.Workflow,
+		HoldFor:        time.Duration(b.HoldFor * float64(time.Second)),
 	}
 }
 
@@ -174,7 +177,8 @@ func main() {
 	mux.HandleFunc("/api/credit", post(func(ctx context.Context, b body) (any, error) {
 		return client.Credit(ctx, withdrawReq(b))
 	}))
-	// Reserve now, settle later: returns { captureId } for /api/close.
+	// Reserve now, settle later: returns { captureId, expiresAt } for /api/close. Optional
+	// holdFor (seconds) sets how long the hold stays open; default 24 hours.
 	mux.HandleFunc("/api/withdraw-async", post(func(ctx context.Context, b body) (any, error) {
 		return client.WithdrawAsync(ctx, withdrawReq(b))
 	}))
