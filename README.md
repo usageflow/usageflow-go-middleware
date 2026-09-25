@@ -148,12 +148,17 @@ Before releasing documentation changes, complete [RELEASE_CHECKLIST.md](RELEASE_
 
 MIT — see [LICENSE](LICENSE).
 
-## Vibe: metered LLM calls (`pkg/vibe`)
+## Vibe: metered LLM calls (`pkg/vibe`) (beta)
+
+> **Beta.** Vibe's API may change between minor versions. If something breaks or feels
+> wrong, please report it.
 
 Go port of `@usageflow/vibe`. It wraps Anthropic and OpenAI behind one client and
 uses the same UsageFlow WebSocket flow as the JS SDK: `request_for_allocation`
 (a worst-case reservation) → provider call → `use_allocation` (settled with real
-token usage).
+token usage). Usage is recorded asynchronously right after each call, so a call to
+`Credits()` immediately afterward can lag by a moment; `Withdraw`, `Credit`, and
+`Close` return as soon as the request has been sent, not once it's been applied.
 
 ```go
 import "github.com/usageflow/usageflow-go-middleware/v2/pkg/vibe"

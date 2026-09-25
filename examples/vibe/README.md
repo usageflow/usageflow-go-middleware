@@ -2,6 +2,8 @@
 
 Go counterpart of `agents/js/examples/vibe-app`, using `pkg/vibe`. Same routes and defaults; default port is **4003**.
 
+Vibe is in beta — its API may change between minor versions.
+
 ## Setup
 
 ```bash

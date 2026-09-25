@@ -1,6 +1,8 @@
 // Package vibe is the Go port of @usageflow/vibe: a framework-agnostic client that wraps
 // Anthropic and OpenAI behind one interface, gating every call on a UsageFlow
 // request_for_allocation reservation and settling real usage with use_allocation.
+//
+// Beta: this package's API may change between minor versions.
 package vibe
 
 import (
