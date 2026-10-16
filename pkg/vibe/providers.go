@@ -174,6 +174,30 @@ func openAIResponseFormat(outputConfig any) map[string]any {
 	}
 }
 
+// contentBlocks normalizes a Message.Content holding Anthropic-style content blocks to
+// []map[string]any, regardless of which concrete slice type the caller built it as — chat.go
+// builds assistant/tool-result blocks as []map[string]any (e.g. assistantBlocks, resultBlocks in
+// fitapp/internal/coach/chat.go), while content decoded from JSON (e.g. round-tripped through
+// toVibeMessages) comes back as []any of map[string]any. A bare type assertion to either one alone
+// silently misses the other and falls through as an untranslated, provider-specific block array —
+// exactly what reached OpenAI's API as a raw invalid "tool_use" content type before this existed.
+func contentBlocks(c any) ([]map[string]any, bool) {
+	switch v := c.(type) {
+	case []map[string]any:
+		return v, true
+	case []any:
+		out := make([]map[string]any, 0, len(v))
+		for _, item := range v {
+			if m, ok := item.(map[string]any); ok {
+				out = append(out, m)
+			}
+		}
+		return out, true
+	default:
+		return nil, false
+	}
+}
+
 // openAIMessages translates Anthropic-shaped message content (plain text, or a content-block
 // array built by a tool-use round: {"type":"text"|"tool_use"|"tool_result", ...}, the shape
 // chat.go round-trips through Message.Content so one call site works for either provider) into
@@ -183,7 +207,7 @@ func openAIResponseFormat(outputConfig any) map[string]any {
 func openAIMessages(msgs []Message) []map[string]any {
 	out := make([]map[string]any, 0, len(msgs))
 	for _, m := range msgs {
-		blocks, ok := m.Content.([]any)
+		blocks, ok := contentBlocks(m.Content)
 		if !ok {
 			out = append(out, map[string]any{"role": m.Role, "content": m.Content})
 			continue
@@ -191,11 +215,7 @@ func openAIMessages(msgs []Message) []map[string]any {
 		var text strings.Builder
 		var toolCalls []map[string]any
 		var toolResults []map[string]any
-		for _, b := range blocks {
-			blk, ok := b.(map[string]any)
-			if !ok {
-				continue
-			}
+		for _, blk := range blocks {
 			switch str(blk["type"]) {
 			case "text":
 				text.WriteString(str(blk["text"]))

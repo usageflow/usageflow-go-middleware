@@ -322,11 +322,15 @@ func TestOpenAIBodyTranslatesToolsAndToolUseRound(t *testing.T) {
 			"a": map[string]any{"type": "number"}, "b": map[string]any{"type": "number"}}},
 		"strict": true,
 	}
+	// []map[string]any, not []any: the concrete type chat.go's assistantBlocks/resultBlocks
+	// actually are. A bare `.([]any)` type assertion misses this and silently falls through as an
+	// untranslated block array — exactly the bug that shipped and reached OpenAI's live API as a
+	// raw, rejected "tool_use" content type (see contentBlocks).
 	msgs := []Message{
 		{Role: "system", Content: "sys"},
 		{Role: "user", Content: "What is 2+2?"},
-		{Role: "assistant", Content: []any{map[string]any{"type": "tool_use", "id": "call_1", "name": "add", "input": map[string]any{"a": 2.0, "b": 2.0}}}},
-		{Role: "user", Content: []any{map[string]any{"type": "tool_result", "tool_use_id": "call_1", "content": "4"}}},
+		{Role: "assistant", Content: []map[string]any{{"type": "tool_use", "id": "call_1", "name": "add", "input": map[string]any{"a": 2.0, "b": 2.0}}}},
+		{Role: "user", Content: []map[string]any{{"type": "tool_result", "tool_use_id": "call_1", "content": "4"}}},
 	}
 	b := openAIBody(&ChatRequest{Model: "gpt-6-luna", Tools: []any{anthropicTool}, Messages: msgs}, 100, false)
 
