@@ -1,6 +1,14 @@
 # Release Notes
 
-## v2.6.4 (Latest)
+## v2.6.5 (Latest)
+
+### Features
+
+- **`pkg/vibe`: `ChatRequest.OutputConfig`** — passed through untouched as Anthropic's
+  `output_config` (e.g. `{"effort": "low", "format": {"type": "json_schema", "schema": {...}}}`
+  for forced structured output). Ignored by the OpenAI dispatch path.
+
+## v2.6.4
 
 ### Fixes
 

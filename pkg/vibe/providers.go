@@ -99,6 +99,9 @@ func anthropicBody(r *ChatRequest, maxTokens int, stream bool) map[string]any {
 	if r.ToolChoice != nil {
 		body["tool_choice"] = r.ToolChoice
 	}
+	if r.OutputConfig != nil {
+		body["output_config"] = r.OutputConfig
+	}
 	if stream {
 		body["stream"] = true
 	}

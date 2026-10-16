@@ -46,6 +46,10 @@ type ChatRequest struct {
 	// Tools / ToolChoice are passed through untouched to the provider.
 	Tools      []any
 	ToolChoice any
+	// OutputConfig is passed through untouched as Anthropic's output_config (e.g. {"effort":
+	// "low", "format": {"type": "json_schema", "schema": {...}}} for forced structured output).
+	// Ignored by the OpenAI dispatch path.
+	OutputConfig any
 }
 
 // Usage is real token usage reported by the provider.
