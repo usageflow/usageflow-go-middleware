@@ -152,6 +152,31 @@ func contentText(c any) string {
 	return sb.String()
 }
 
+// hasImageContent reports whether any message carries an "image" content block, so a Chat
+// request that includes one can be tagged "IMG" instead of "CHAT" in the reservation's trace
+// metadata (method/url) — Console otherwise shows every Chat call identically regardless of
+// whether it carried an image. This only changes what the request is labeled as in that free-form
+// trace metadata; it does not touch Workflow, which is what Vibe policy routing/billing actually
+// key off (see reserveChat) — so an account's existing per-workflow policies match exactly as
+// before. The one case this can affect is an account that configured a separate FUNCTION/API-type
+// policy keyed to the literal method+URL pair a Vibe call reports (unusual — that mechanism is
+// meant for literal HTTP endpoints, not SDK calls) and specifically matched method "CHAT"; such a
+// policy would stop matching this request once it starts reporting as "IMG".
+func hasImageContent(msgs []Message) bool {
+	for _, m := range msgs {
+		blocks, ok := m.Content.([]any)
+		if !ok {
+			continue
+		}
+		for _, blk := range blocks {
+			if b, ok := blk.(map[string]any); ok && str(b["type"]) == "image" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func mergeMap(base, extra map[string]any) map[string]any {
 	for k, v := range extra {
 		base[k] = v
@@ -317,7 +342,11 @@ func (c *Client) reserveChat(req *ChatRequest) (*chatReservation, error) {
 		"estimatedInputTokens": est,
 		"effectiveMaxTokens":   maxTokens,
 	}, req.Metadata)
-	meta := baseMetadata("CHAT", url, string(req.Provider), req.Model, body)
+	method := "CHAT"
+	if hasImageContent(req.Messages) {
+		method = "IMG"
+	}
+	meta := baseMetadata(method, url, string(req.Provider), req.Model, body)
 
 	r, err := c.reserve(req.Identity, float64(est+maxTokens), req.Workflow, req.Model, meta, req.CustomerMetadata, callHold)
 	if err != nil {

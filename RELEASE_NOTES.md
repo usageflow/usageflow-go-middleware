@@ -1,6 +1,19 @@
 # Release Notes
 
-## v2.6.6 (Latest)
+## v2.6.7 (Latest)
+
+### Features
+
+- **`pkg/vibe`: `Chat` tags image calls as method `"IMG"`**: a request whose content carries an
+  Anthropic `image` content block is now reserved/settled with trace metadata `method: "IMG"`
+  instead of the usual `"CHAT"` — Console previously showed every Chat call identically regardless
+  of whether it included an image. `Workflow` is untouched, so Vibe policy routing/billing is
+  unaffected (confirmed against ledger: policy selection and billing read `Workflow`/`ResourceType`/
+  quota state, never the `method`/`url` trace fields). The one case this can change is an account
+  that configured a separate FUNCTION/API-type policy keyed to the literal `method` a Vibe call
+  reports — unusual, since that mechanism targets literal HTTP endpoints, not SDK calls.
+
+## v2.6.6
 
 ### Fixes
 

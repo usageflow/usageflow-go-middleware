@@ -96,6 +96,36 @@ func TestChatReserveDispatchSettle(t *testing.T) {
 	assert.Equal(t, "vibe:chat:openai:gpt-4o-mini-2024", settle["metadata"].(map[string]any)["url"])
 }
 
+// A Chat call whose content carries an image block is reserved with method "IMG" instead of
+// "CHAT" — Console otherwise shows image and text calls identically. Workflow is untouched, so
+// Vibe policy routing is unaffected; see hasImageContent's doc comment.
+func TestReserveChatTagsImageMethod(t *testing.T) {
+	sock := &mockSocket{}
+	c := newWithTransport(Options{AnthropicAPIKey: "k"}, sock)
+
+	_, err := c.reserveChat(&ChatRequest{
+		Identity: "cust", Model: "claude-haiku-5-5", Workflow: "wf",
+		Messages: []Message{{Role: "user", Content: []any{
+			map[string]any{"type": "text", "text": "what's this?"},
+			map[string]any{"type": "image", "source": map[string]any{"type": "base64", "media_type": "image/jpeg", "data": "Zm9v"}},
+		}}},
+	})
+	require.NoError(t, err)
+	reserve := sock.sent[0].Payload.(map[string]any)
+	assert.Equal(t, "IMG", reserve["metadata"].(map[string]any)["method"])
+	assert.Equal(t, "wf", reserve["allocationMetadata"].(map[string]any)["workflowId"])
+
+	sock2 := &mockSocket{}
+	c2 := newWithTransport(Options{AnthropicAPIKey: "k"}, sock2)
+	_, err = c2.reserveChat(&ChatRequest{
+		Identity: "cust", Model: "claude-haiku-5-5",
+		Messages: []Message{{Role: "user", Content: "plain text, no image"}},
+	})
+	require.NoError(t, err)
+	reserve2 := sock2.sent[0].Payload.(map[string]any)
+	assert.Equal(t, "CHAT", reserve2["metadata"].(map[string]any)["method"])
+}
+
 func TestChatDenialSkipsProvider(t *testing.T) {
 	hits := 0
 	srv := openAIServer(t, &hits)
