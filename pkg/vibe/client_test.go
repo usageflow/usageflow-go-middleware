@@ -311,6 +311,64 @@ func TestOpenAIBodyTranslatesOutputConfig(t *testing.T) {
 	assert.Nil(t, openAIBody(&ChatRequest{Model: "gpt-4o"}, 100, false)["response_format"])
 }
 
+// A chat tool-use round (fitapp's chat.go) is built once in Anthropic's wire shape — tool defs as
+// {name, description, input_schema, strict}, an assistant turn's reply as a tool_use content
+// block, the result as a tool_result content block — and reused regardless of which provider
+// serves the call. After a policy routes it to OpenAI, all three must come out in OpenAI's shape.
+func TestOpenAIBodyTranslatesToolsAndToolUseRound(t *testing.T) {
+	anthropicTool := map[string]any{
+		"name": "add", "description": "Adds two numbers",
+		"input_schema": map[string]any{"type": "object", "properties": map[string]any{
+			"a": map[string]any{"type": "number"}, "b": map[string]any{"type": "number"}}},
+		"strict": true,
+	}
+	msgs := []Message{
+		{Role: "system", Content: "sys"},
+		{Role: "user", Content: "What is 2+2?"},
+		{Role: "assistant", Content: []any{map[string]any{"type": "tool_use", "id": "call_1", "name": "add", "input": map[string]any{"a": 2.0, "b": 2.0}}}},
+		{Role: "user", Content: []any{map[string]any{"type": "tool_result", "tool_use_id": "call_1", "content": "4"}}},
+	}
+	b := openAIBody(&ChatRequest{Model: "gpt-6-luna", Tools: []any{anthropicTool}, Messages: msgs}, 100, false)
+
+	// reasoning_effort must be forced to "none": OpenAI's /v1/chat/completions 400s a reasoning
+	// model's default reasoning_effort the moment tools are attached (verified live).
+	assert.Equal(t, "none", b["reasoning_effort"])
+
+	tools, ok := b["tools"].([]any)
+	require.True(t, ok)
+	require.Len(t, tools, 1)
+	fn := tools[0].(map[string]any)["function"].(map[string]any)
+	assert.Equal(t, "function", tools[0].(map[string]any)["type"])
+	assert.Equal(t, "add", fn["name"])
+	assert.Equal(t, anthropicTool["input_schema"], fn["parameters"])
+	assert.Equal(t, true, fn["strict"])
+
+	wire, ok := b["messages"].([]map[string]any)
+	require.True(t, ok)
+	require.Len(t, wire, 4)
+	assert.Equal(t, "sys", wire[0]["content"])
+	assert.Equal(t, "What is 2+2?", wire[1]["content"])
+	calls, ok := wire[2]["tool_calls"].([]map[string]any)
+	require.True(t, ok)
+	require.Len(t, calls, 1)
+	assert.Equal(t, "call_1", calls[0]["id"])
+	fnCall := calls[0]["function"].(map[string]any)
+	assert.Equal(t, "add", fnCall["name"])
+	assert.JSONEq(t, `{"a":2,"b":2}`, fnCall["arguments"].(string))
+	assert.Equal(t, "tool", wire[3]["role"])
+	assert.Equal(t, "call_1", wire[3]["tool_call_id"])
+	assert.Equal(t, "4", wire[3]["content"])
+}
+
+func TestOpenAIToolChoiceTranslation(t *testing.T) {
+	assert.Equal(t, "auto", openAIToolChoice(map[string]any{"type": "auto"}))
+	assert.Equal(t, "required", openAIToolChoice(map[string]any{"type": "any"}))
+	assert.Equal(t, "none", openAIToolChoice(map[string]any{"type": "none"}))
+	assert.Equal(t, map[string]any{"type": "function", "function": map[string]any{"name": "add"}},
+		openAIToolChoice(map[string]any{"type": "tool", "name": "add"}))
+	assert.Nil(t, openAIToolChoice(nil))
+}
+
 func TestWithdrawAsyncThenClose(t *testing.T) {
 	sock := &mockSocket{reply: func(m *socket.UsageFlowSocketMessage) *socket.UsageFlowSocketResponse {
 		return &socket.UsageFlowSocketResponse{Type: "ok", Payload: map[string]any{"allocationId": "alloc-9"}}

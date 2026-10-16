@@ -112,20 +112,27 @@ func anthropicBody(r *ChatRequest, maxTokens int, stream bool) map[string]any {
 }
 
 func openAIBody(r *ChatRequest, maxTokens int, stream bool) map[string]any {
-	body := map[string]any{"model": r.Model, "messages": r.Messages}
+	body := map[string]any{"model": r.Model, "messages": openAIMessages(r.Messages)}
+	tools := openAITools(r.Tools)
 	if isOpenAIReasoningModel(r.Model) {
 		body["max_completion_tokens"] = maxTokens
+		// /v1/chat/completions rejects a reasoning model's default (non-"none") reasoning_effort
+		// the moment tools are attached ("Function tools with reasoning_effort are not supported
+		// for <model> ... set reasoning_effort to 'none'"); verified live against gpt-6-luna.
+		if len(tools) > 0 {
+			body["reasoning_effort"] = "none"
+		}
 	} else {
 		body["max_tokens"] = maxTokens
 		if r.Temperature != nil {
 			body["temperature"] = *r.Temperature
 		}
 	}
-	if len(r.Tools) > 0 {
-		body["tools"] = r.Tools
+	if tools != nil {
+		body["tools"] = tools
 	}
-	if r.ToolChoice != nil {
-		body["tool_choice"] = r.ToolChoice
+	if tc := openAIToolChoice(r.ToolChoice); tc != nil {
+		body["tool_choice"] = tc
 	}
 	if rf := openAIResponseFormat(r.OutputConfig); rf != nil {
 		body["response_format"] = rf
@@ -165,6 +172,111 @@ func openAIResponseFormat(outputConfig any) map[string]any {
 			"schema": schema,
 		},
 	}
+}
+
+// openAIMessages translates Anthropic-shaped message content (plain text, or a content-block
+// array built by a tool-use round: {"type":"text"|"tool_use"|"tool_result", ...}, the shape
+// chat.go round-trips through Message.Content so one call site works for either provider) into
+// OpenAI's chat-completions message shape. A message carrying tool_result blocks has no OpenAI
+// equivalent as a single message — each becomes its own role:"tool" message — so it expands to
+// several entries; everything else maps one-to-one.
+func openAIMessages(msgs []Message) []map[string]any {
+	out := make([]map[string]any, 0, len(msgs))
+	for _, m := range msgs {
+		blocks, ok := m.Content.([]any)
+		if !ok {
+			out = append(out, map[string]any{"role": m.Role, "content": m.Content})
+			continue
+		}
+		var text strings.Builder
+		var toolCalls []map[string]any
+		var toolResults []map[string]any
+		for _, b := range blocks {
+			blk, ok := b.(map[string]any)
+			if !ok {
+				continue
+			}
+			switch str(blk["type"]) {
+			case "text":
+				text.WriteString(str(blk["text"]))
+			case "tool_use":
+				args, _ := json.Marshal(blk["input"])
+				toolCalls = append(toolCalls, map[string]any{
+					"id": str(blk["id"]), "type": "function",
+					"function": map[string]any{"name": str(blk["name"]), "arguments": string(args)},
+				})
+			case "tool_result":
+				toolResults = append(toolResults, map[string]any{
+					"role": "tool", "tool_call_id": str(blk["tool_use_id"]), "content": str(blk["content"]),
+				})
+			}
+		}
+		if len(toolResults) > 0 {
+			out = append(out, toolResults...)
+			continue
+		}
+		msg := map[string]any{"role": m.Role, "content": text.String()}
+		if len(toolCalls) > 0 {
+			msg["tool_calls"] = toolCalls
+		}
+		out = append(out, msg)
+	}
+	return out
+}
+
+// openAITools translates Anthropic-shaped tool definitions ({"name", "description",
+// "input_schema", "strict"}, the only shape callers build today — see toolSpec.raw() in
+// fitapp/internal/coach/chat.go) into OpenAI's function-tool shape. Anything already in OpenAI
+// shape (has a "type" key) passes through untouched.
+func openAITools(tools []any) []any {
+	if len(tools) == 0 {
+		return nil
+	}
+	out := make([]any, 0, len(tools))
+	for _, t := range tools {
+		tm, ok := t.(map[string]any)
+		if !ok {
+			out = append(out, t)
+			continue
+		}
+		if _, isOpenAIShape := tm["type"]; isOpenAIShape {
+			out = append(out, t)
+			continue
+		}
+		fn := map[string]any{"name": tm["name"], "description": tm["description"], "parameters": tm["input_schema"]}
+		if strict, _ := tm["strict"].(bool); strict {
+			fn["strict"] = true
+		}
+		out = append(out, map[string]any{"type": "function", "function": fn})
+	}
+	return out
+}
+
+// openAIToolChoice translates Anthropic-shaped tool_choice ({"type": "auto"|"any"|"none"|"tool",
+// "name": ...}) into OpenAI's chat-completions tool_choice. A plain string (already OpenAI shape)
+// passes through untouched.
+func openAIToolChoice(toolChoice any) any {
+	if toolChoice == nil {
+		return nil
+	}
+	if s, ok := toolChoice.(string); ok {
+		return s
+	}
+	m, ok := toolChoice.(map[string]any)
+	if !ok {
+		return toolChoice
+	}
+	switch str(m["type"]) {
+	case "auto":
+		return "auto"
+	case "any":
+		return "required"
+	case "none":
+		return "none"
+	case "tool":
+		return map[string]any{"type": "function", "function": map[string]any{"name": str(m["name"])}}
+	}
+	return toolChoice
 }
 
 func str(v any) string { s, _ := v.(string); return s }
