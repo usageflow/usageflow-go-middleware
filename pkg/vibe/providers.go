@@ -124,11 +124,44 @@ func openAIBody(r *ChatRequest, maxTokens int, stream bool) map[string]any {
 	if r.ToolChoice != nil {
 		body["tool_choice"] = r.ToolChoice
 	}
+	if rf := openAIResponseFormat(r.OutputConfig); rf != nil {
+		body["response_format"] = rf
+	}
 	if stream {
 		body["stream"] = true
 		body["stream_options"] = map[string]any{"include_usage": true}
 	}
 	return body
+}
+
+// openAIResponseFormat translates the Anthropic-shaped OutputConfig (passed through untouched in
+// anthropicBody as output_config: {"format": {"type": "json_schema", "schema": {...}}, ...}) into
+// OpenAI's chat-completions response_format, so a schema-constrained call still gets structured
+// output after a policy routes it from Claude to an OpenAI model. Only the json_schema case is
+// translated (the only one callers use today); anything else in OutputConfig is dropped rather
+// than sent to OpenAI malformed. Not run in strict mode: callers' schemas (e.g. fitapp's
+// partialObject) mark only some properties required, which OpenAI's strict mode rejects, and
+// non-strict is still enough to bias the model toward the given shape.
+func openAIResponseFormat(outputConfig any) map[string]any {
+	cfg, ok := outputConfig.(map[string]any)
+	if !ok {
+		return nil
+	}
+	format, ok := cfg["format"].(map[string]any)
+	if !ok || str(format["type"]) != "json_schema" {
+		return nil
+	}
+	schema, ok := format["schema"]
+	if !ok {
+		return nil
+	}
+	return map[string]any{
+		"type": "json_schema",
+		"json_schema": map[string]any{
+			"name":   "response",
+			"schema": schema,
+		},
+	}
 }
 
 func str(v any) string { s, _ := v.(string); return s }

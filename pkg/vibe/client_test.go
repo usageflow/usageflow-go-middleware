@@ -287,6 +287,28 @@ func TestReasoningModelBody(t *testing.T) {
 	assert.Contains(t, b, "temperature")
 }
 
+// A schema-constrained call (fitapp's structured extraction, chat tool replies, etc.) must still
+// get structured output after a Vibe policy routes it from Claude to an OpenAI model: OutputConfig
+// is set once, in the caller's Anthropic-shaped form, regardless of which provider ends up serving
+// the request.
+func TestOpenAIBodyTranslatesOutputConfig(t *testing.T) {
+	schema := map[string]any{"type": "object", "properties": map[string]any{"ok": map[string]any{"type": "boolean"}}}
+	r := &ChatRequest{
+		Model:        "gpt-4o",
+		OutputConfig: map[string]any{"effort": "low", "format": map[string]any{"type": "json_schema", "schema": schema}},
+	}
+	b := openAIBody(r, 100, false)
+	rf, ok := b["response_format"].(map[string]any)
+	require.True(t, ok, "response_format missing: %v", b)
+	assert.Equal(t, "json_schema", rf["type"])
+	js, ok := rf["json_schema"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, schema, js["schema"])
+	assert.NotEmpty(t, js["name"])
+
+	assert.Nil(t, openAIBody(&ChatRequest{Model: "gpt-4o"}, 100, false)["response_format"])
+}
+
 func TestWithdrawAsyncThenClose(t *testing.T) {
 	sock := &mockSocket{reply: func(m *socket.UsageFlowSocketMessage) *socket.UsageFlowSocketResponse {
 		return &socket.UsageFlowSocketResponse{Type: "ok", Payload: map[string]any{"allocationId": "alloc-9"}}
