@@ -25,9 +25,12 @@ func inferProvider(model string) Provider {
 	return ProviderOpenAI
 }
 
-// OpenAI reasoning models reject max_tokens and non-default temperature.
+// OpenAI reasoning models reject max_tokens and non-default temperature. Keep this in sync with
+// the SupportsTemperature:false entries in ledger/pkg/types/model_registry.go (that registry is
+// the source of truth for per-model capabilities; this is a local, provider-call-shape mirror of
+// it since vibe doesn't depend on ledger).
 func isOpenAIReasoningModel(model string) bool {
-	for _, p := range []string{"o1", "o3", "o4", "gpt-5"} {
+	for _, p := range []string{"o1", "o3", "o4", "gpt-5", "gpt-6"} {
 		if strings.HasPrefix(model, p) {
 			return true
 		}

@@ -278,11 +278,13 @@ func TestEmbed(t *testing.T) {
 
 func TestReasoningModelBody(t *testing.T) {
 	temp := 0.5
-	b := openAIBody(&ChatRequest{Model: "gpt-5", Temperature: &temp}, 100, false)
-	assert.Contains(t, b, "max_completion_tokens")
-	assert.NotContains(t, b, "max_tokens")
-	assert.NotContains(t, b, "temperature")
-	b = openAIBody(&ChatRequest{Model: "gpt-4o", Temperature: &temp}, 100, false)
+	for _, model := range []string{"gpt-5", "gpt-6-luna", "gpt-6-sol", "gpt-6-astra"} {
+		b := openAIBody(&ChatRequest{Model: model, Temperature: &temp}, 100, false)
+		assert.Contains(t, b, "max_completion_tokens", model)
+		assert.NotContains(t, b, "max_tokens", model)
+		assert.NotContains(t, b, "temperature", model)
+	}
+	b := openAIBody(&ChatRequest{Model: "gpt-4o", Temperature: &temp}, 100, false)
 	assert.Contains(t, b, "max_tokens")
 	assert.Contains(t, b, "temperature")
 }
