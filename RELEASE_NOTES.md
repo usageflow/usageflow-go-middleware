@@ -1,6 +1,12 @@
 # Release Notes
 
-## v2.6.3 (Latest)
+## v2.6.4 (Latest)
+
+### Fixes
+
+- **`pkg/vibe`: image content blocks reserved millions of "tokens"**: `Message.Content` is now `any`, so callers can send a provider-shaped content-block array (e.g. Anthropic `image`/`tool_use`/`tool_result` blocks) through `Chat`/`Stream`, not just a plain string. The token estimate used to size a `Chat` reservation (`estimateTokens`) previously fell back to `json.Marshal`-ing the whole message when sizing a non-string `Content`, which included an image block's full base64 payload — a single photo could inflate the estimate into the hundreds of thousands of "tokens" and get the reservation rejected outright. Image blocks are now sized with a flat placeholder (`imageTokenEstimate`, 1600 tokens) instead of their encoded bytes.
+
+## v2.6.3
 
 ### Features
 

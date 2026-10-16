@@ -80,7 +80,7 @@ func anthropicBody(r *ChatRequest, maxTokens int, stream bool) map[string]any {
 	for _, m := range r.Messages {
 		if m.Role == "system" {
 			if system == "" {
-				system = m.Content
+				system = contentText(m.Content)
 			}
 			continue
 		}

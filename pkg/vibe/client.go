@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -117,6 +118,38 @@ func estimateTokens(items ...string) int {
 		total += (len([]rune(s))+2)/3 + 4
 	}
 	return total
+}
+
+// imageTokenEstimate is a conservative flat per-image token cost, standing in for the real
+// vision token count (which providers derive from pixel dimensions, roughly width*height/750,
+// capped around 1600 for a single max-size tile) when all the caller gave us is encoded bytes.
+const imageTokenEstimate = 1600
+
+// contentText returns a rough text form of a Message.Content for token estimation: the string
+// itself, or a JSON encoding of a content-block array/object — except an "image" block, which is
+// replaced by a fixed-size placeholder instead of its base64 payload. Sizing that payload
+// directly (chars/3 in estimateTokens) turns one photo into millions of "tokens", and the
+// reservation that buys gets rejected even though the real vision call costs ~1-2k tokens.
+func contentText(c any) string {
+	if s, ok := c.(string); ok {
+		return s
+	}
+	blocks, ok := c.([]any)
+	if !ok {
+		b, _ := json.Marshal(c)
+		return string(b)
+	}
+	var sb strings.Builder
+	for _, blk := range blocks {
+		m, ok := blk.(map[string]any)
+		if !ok || str(m["type"]) != "image" {
+			b, _ := json.Marshal(blk)
+			sb.Write(b)
+			continue
+		}
+		sb.WriteString(strings.Repeat("x", imageTokenEstimate*3))
+	}
+	return sb.String()
 }
 
 func mergeMap(base, extra map[string]any) map[string]any {
@@ -274,7 +307,7 @@ func (c *Client) reserveChat(req *ChatRequest) (*chatReservation, error) {
 	}
 	contents := make([]string, len(req.Messages))
 	for i, m := range req.Messages {
-		contents[i] = m.Content
+		contents[i] = contentText(m.Content)
 	}
 	est := estimateTokens(contents...)
 	url := fmt.Sprintf("vibe:chat:%s:%s", req.Provider, req.Model)

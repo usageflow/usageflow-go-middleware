@@ -201,4 +201,7 @@ credits, err := client.Credits(ctx, vibe.CreditsRequest{Identity: "cust_acme", W
 // credits.Workflows[0].Remaining (nil when the workflow never blocks), .Blocked, .ResetInterval
 ```
 
-- Not yet ported from the JS SDK: image, speak, transcribe, moderate and batch.
+- `Message.Content` accepts a plain string or a provider-shaped content-block array (e.g.
+  Anthropic `image`/`tool_use`/`tool_result` blocks), so `Chat`/`Stream` can carry multi-modal
+  input and multi-round tool calling. The dedicated JS-SDK-style `image`, `speak`, `transcribe`,
+  `moderate` and `batch` helper methods are not yet ported.

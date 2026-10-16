@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 
@@ -364,4 +365,31 @@ func TestCreditsErrors(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "workflow not found")
 	assert.NotErrorIs(t, err, ErrCreditsUnsupported)
+}
+
+// A real photo's base64 payload is way bigger than imageTokenEstimate*3 chars, so without the
+// placeholder swap, estimateTokens(contentText(...)) on an image block would blow past this and
+// turn into a multi-hundred-thousand-token reservation for one picture.
+func TestContentTextImageBlockDoesNotSizeBase64Payload(t *testing.T) {
+	hugePayload := strings.Repeat("A", 2_000_000) // stand-in for a multi-MB base64 photo
+	content := []any{
+		map[string]any{"type": "text", "text": "what's in this photo?"},
+		map[string]any{
+			"type":   "image",
+			"source": map[string]any{"type": "base64", "media_type": "image/jpeg", "data": hugePayload},
+		},
+	}
+	got := estimateTokens(contentText(content))
+	assert.Less(t, got, 10_000, "image block inflated the token estimate with its base64 payload")
+}
+
+func TestContentTextPlainStringUnchanged(t *testing.T) {
+	assert.Equal(t, "hello", contentText("hello"))
+}
+
+func TestContentTextNonImageBlocksStillSized(t *testing.T) {
+	content := []any{map[string]any{"type": "tool_use", "id": "t1", "name": "lookup", "input": map[string]any{"q": "x"}}}
+	got := contentText(content)
+	assert.Contains(t, got, "tool_use")
+	assert.Contains(t, got, "lookup")
 }

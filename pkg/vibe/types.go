@@ -18,10 +18,13 @@ const (
 	ProviderOpenAI    Provider = "openai"
 )
 
-// Message is one chat turn. Role is "user", "assistant" or "system".
+// Message is one chat turn. Role is "user", "assistant" or "system". Content is usually a plain
+// string, but may be a provider-shaped content-block array (e.g. []map[string]any with "type":
+// "text"/"tool_use"/"tool_result"/"image") for multi-round tool calling or multi-modal input —
+// it is forwarded to the provider as-is.
 type Message struct {
 	Role    string `json:"role"`
-	Content string `json:"content"`
+	Content any    `json:"content"`
 }
 
 // ChatRequest describes a metered chat call.
