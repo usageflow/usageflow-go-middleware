@@ -15,11 +15,16 @@ import (
 )
 
 const (
-	defaultWSURL      = "wss://api.usageflow.io/ws"
-	defaultPoolSize   = 5
-	maxPoolSize       = 5
-	reconnectDelay    = 5 * time.Second
-	requestTimeout    = 2 * time.Second
+	defaultWSURL    = "wss://api.usageflow.io/ws"
+	defaultPoolSize = 5
+	maxPoolSize     = 5
+	reconnectDelay  = 5 * time.Second
+	// requestTimeout must tolerate a cold identity's hot-state lookup, not just the steady-state
+	// path: observed 2.1s on the first request_for_allocation right after a client reconnect
+	// (hot_state_load_ms + identity_metadata_ms + policy lookups all miss cache at once), vs.
+	// ~0.4s once warm. 2s clipped that cold case by ~100ms and failed every request immediately
+	// after a deploy.
+	requestTimeout    = 5 * time.Second
 	pingPeriod        = 30 * time.Second
 	pongWait          = 60 * time.Second
 	writeWait         = 10 * time.Second

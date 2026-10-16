@@ -252,7 +252,7 @@ func TestConstants(t *testing.T) {
 	assert.Equal(t, 5, defaultPoolSize)
 	assert.Equal(t, 5, maxPoolSize)
 	assert.Equal(t, 5*time.Second, reconnectDelay)
-	assert.Equal(t, 2*time.Second, requestTimeout)
+	assert.Equal(t, 5*time.Second, requestTimeout)
 	assert.Equal(t, 30*time.Second, pingPeriod)
 	assert.Equal(t, 60*time.Second, pongWait)
 	assert.Equal(t, 10*time.Second, writeWait)

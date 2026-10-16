@@ -1,6 +1,15 @@
 # Release Notes
 
-## v2.6.5 (Latest)
+## v2.6.6 (Latest)
+
+### Fixes
+
+- **Socket `requestTimeout` raised 2s → 5s**: the first `request_for_allocation` after a client
+  reconnect (e.g. right after a deploy) pays a cold hot-state/identity-metadata/policy-lookup
+  cost the steady-state path doesn't — observed 2.1s cold vs. ~0.4s warm. The old 2s timeout
+  clipped that cold case by ~100ms and failed every call immediately after a reconnect.
+
+## v2.6.5
 
 ### Features
 
