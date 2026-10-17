@@ -199,11 +199,13 @@ func contentBlocks(c any) ([]map[string]any, bool) {
 }
 
 // openAIMessages translates Anthropic-shaped message content (plain text, or a content-block
-// array built by a tool-use round: {"type":"text"|"tool_use"|"tool_result", ...}, the shape
-// chat.go round-trips through Message.Content so one call site works for either provider) into
-// OpenAI's chat-completions message shape. A message carrying tool_result blocks has no OpenAI
-// equivalent as a single message — each becomes its own role:"tool" message — so it expands to
-// several entries; everything else maps one-to-one.
+// array built by a tool-use or vision round: {"type":"text"|"image"|"tool_use"|"tool_result",
+// ...}, the shape chat.go round-trips through Message.Content so one call site works for either
+// provider) into OpenAI's chat-completions message shape. A message carrying tool_result blocks
+// has no OpenAI equivalent as a single message — each becomes its own role:"tool" message — so
+// it expands to several entries; everything else maps one-to-one. A text-only message collapses
+// to a plain string (not a one-part array) since that's the shape every existing caller/test
+// already sends and expects back.
 func openAIMessages(msgs []Message) []map[string]any {
 	out := make([]map[string]any, 0, len(msgs))
 	for _, m := range msgs {
@@ -212,13 +214,17 @@ func openAIMessages(msgs []Message) []map[string]any {
 			out = append(out, map[string]any{"role": m.Role, "content": m.Content})
 			continue
 		}
-		var text strings.Builder
+		var parts []map[string]any
 		var toolCalls []map[string]any
 		var toolResults []map[string]any
 		for _, blk := range blocks {
 			switch str(blk["type"]) {
 			case "text":
-				text.WriteString(str(blk["text"]))
+				parts = append(parts, map[string]any{"type": "text", "text": str(blk["text"])})
+			case "image":
+				if url := openAIImageURL(blk["source"]); url != "" {
+					parts = append(parts, map[string]any{"type": "image_url", "image_url": map[string]any{"url": url}})
+				}
 			case "tool_use":
 				args, _ := json.Marshal(blk["input"])
 				toolCalls = append(toolCalls, map[string]any{
@@ -235,13 +241,47 @@ func openAIMessages(msgs []Message) []map[string]any {
 			out = append(out, toolResults...)
 			continue
 		}
-		msg := map[string]any{"role": m.Role, "content": text.String()}
+		msg := map[string]any{"role": m.Role, "content": openAIContent(parts)}
 		if len(toolCalls) > 0 {
 			msg["tool_calls"] = toolCalls
 		}
 		out = append(out, msg)
 	}
 	return out
+}
+
+// openAIContent collapses a parts list to a plain string when it's a single text part (or
+// empty) — the shape every text-only caller/test already sends and expects back — and otherwise
+// returns the OpenAI multi-part content array (needed once an image part is present).
+func openAIContent(parts []map[string]any) any {
+	if len(parts) == 0 {
+		return ""
+	}
+	if len(parts) == 1 && str(parts[0]["type"]) == "text" {
+		return str(parts[0]["text"])
+	}
+	return parts
+}
+
+// openAIImageURL translates an Anthropic image block's "source" ({"type": "base64",
+// "media_type": ..., "data": ...} or {"type": "url", "url": ...}) into the single data: or
+// https: URL string OpenAI's image_url part takes.
+func openAIImageURL(source any) string {
+	src, ok := source.(map[string]any)
+	if !ok {
+		return ""
+	}
+	switch str(src["type"]) {
+	case "base64":
+		mt, data := str(src["media_type"]), str(src["data"])
+		if mt == "" || data == "" {
+			return ""
+		}
+		return "data:" + mt + ";base64," + data
+	case "url":
+		return str(src["url"])
+	}
+	return ""
 }
 
 // openAITools translates Anthropic-shaped tool definitions ({"name", "description",

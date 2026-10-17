@@ -364,6 +364,41 @@ func TestOpenAIBodyTranslatesToolsAndToolUseRound(t *testing.T) {
 	assert.Equal(t, "4", wire[3]["content"])
 }
 
+// fitapp's screenshot importer (coach.ExtractWorkouts) sends each image as its own {"type":
+// "text"} + {"type":"image"} block pair in one user message, Anthropic-shaped. openAIMessages'
+// switch used to only handle "text"/"tool_use"/"tool_result" — an "image" block hit no case and
+// was silently dropped, so once a Vibe policy routed the vision model to OpenAI the model saw no
+// picture at all (reported as the coach saying a re-uploaded screenshot had "nothing new" or not
+// understanding a non-workout screenshot like a sleep summary).
+func TestOpenAIMessagesTranslatesImageBlocks(t *testing.T) {
+	msgs := []Message{
+		{Role: "user", Content: []map[string]any{
+			{"type": "text", "text": "Image 0:"},
+			{"type": "image", "source": map[string]any{"type": "base64", "media_type": "image/png", "data": "AAAA"}},
+			{"type": "text", "text": "What's shown?"},
+		}},
+	}
+	wire := openAIMessages(msgs)
+	require.Len(t, wire, 1)
+	parts, ok := wire[0]["content"].([]map[string]any)
+	require.True(t, ok, "expected a multi-part content array once an image block is present")
+	require.Len(t, parts, 3)
+	assert.Equal(t, "text", parts[0]["type"])
+	assert.Equal(t, "Image 0:", parts[0]["text"])
+	assert.Equal(t, "image_url", parts[1]["type"])
+	assert.Equal(t, "data:image/png;base64,AAAA", parts[1]["image_url"].(map[string]any)["url"])
+	assert.Equal(t, "text", parts[2]["type"])
+	assert.Equal(t, "What's shown?", parts[2]["text"])
+}
+
+// A text-only block message must still collapse to a plain string (not a one-part array) so
+// every existing caller/test that already asserts a bare string keeps working.
+func TestOpenAIMessagesTextOnlyStaysPlainString(t *testing.T) {
+	wire := openAIMessages([]Message{{Role: "user", Content: []map[string]any{{"type": "text", "text": "hi"}}}})
+	require.Len(t, wire, 1)
+	assert.Equal(t, "hi", wire[0]["content"])
+}
+
 func TestOpenAIToolChoiceTranslation(t *testing.T) {
 	assert.Equal(t, "auto", openAIToolChoice(map[string]any{"type": "auto"}))
 	assert.Equal(t, "required", openAIToolChoice(map[string]any{"type": "any"}))
